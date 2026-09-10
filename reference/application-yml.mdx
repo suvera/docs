@@ -1,0 +1,174 @@
+---
+title: "application.yml Reference: Every Top-Level Configuration Key"
+sidebarTitle: "application.yml"
+description: "Complete reference for application.yml: server, winter, datasource, modules, logger, and module-specific keys, with a link to the concept page that documents each."
+---
+
+`application.yml` is the central configuration file for a Winter Boot application. It must live in the `config` directory referenced by `#[WinterBootApplication(configDirectory: [...])]`. This page indexes every top-level key the framework and its official libraries recognise, with one-line descriptions and links to the concept page that documents each in full.
+
+For prose walkthroughs of properties, `#[Value]` injection, and additional property sources see [Configuration](/configuration).
+
+## Framework top-level keys
+
+### `server`
+
+HTTP server configuration used by `WinterWebSwooleApplication`.
+
+```yaml
+server:
+    port: 8080
+    address: 0.0.0.0
+    context-path: /
+```
+
+Documented in [Configuration](/configuration).
+
+### `winter`
+
+Framework-wide runtime settings.
+
+```yaml
+winter:
+    application:
+        name: "My Winter App"
+        id: MyApp
+        version: 1.0.0
+    namespaces:
+        cacheTime: 10
+    route:
+        cacheTime: 10
+```
+
+- `application.name`, `application.id`, `application.version`: identity used in logs and actuator.
+- `namespaces.cacheTime`: how long reflection scan results are cached.
+- `route.cacheTime`: how long route mappings are cached.
+
+### `datasource`
+
+List of relational datasources. Each entry produces a named `PdbcTemplate` bean and a transaction manager bean.
+
+```yaml
+datasource:
+    -   name: defaultdb
+        isPrimary: true
+        url: "sqlite::memory:"
+        username: myuser
+        password: mypassword
+        driverClass: dev\winterframework\pdbc\pdo\PdoDataSource
+        validationQuery: SELECT 1
+        connection:
+            persistent: true
+            errorMode: ERRMODE_EXCEPTION
+            columnsCase: CASE_NATURAL
+            idleTimeout: 300
+            autoCommit: true
+```
+
+Documented in [Datasources & PdbcTemplate](/data/database).
+
+An optional `migrations.enabled: true` on a datasource entry opts the connection into [SQL migrations](/data/migrations).
+
+### `modules`
+
+List of Winter modules (libraries) to load at startup.
+
+```yaml
+modules:
+    - module: 'dev\winterframework\kafka\KafkaModule'
+      enabled: true
+      configFile: 'config/kafka-config.yml'
+```
+
+Modules are loaded in order. Documented in [The Module System](/core/module-system).
+
+### `logger`
+
+Monolog-cascade configuration for logging channels, handlers, and formatters.
+
+Documented in [Logging](/ops/logging).
+
+### `propertySources`
+
+List of additional property sources to load on top of `application.yml`.
+
+Documented in [Configuration](/configuration).
+
+### Custom application keys
+
+Any additional top-level key you define is exposed to `#[Value("myApp.value1")]` and can be read via `PropertyContext`. Convention is to nest your application config under a single namespace (for example `myApp:`).
+
+## Library-specific keys
+
+Each Winter library reads its own top-level keys. The keys can live directly in `application.yml` or in a module-specific file referenced by the `configFile` entry under `modules:`.
+
+### `opensearch`
+
+Used by [OpenSearch](/modules/opensearch) and the framework's [OpenSearch migration runner](/data/opensearch-migrations).
+
+```yaml
+opensearch:
+    -   name: opensearch
+        hosts:
+            - https://localhost:9200
+        username: admin
+        password: secret
+        ssl_verification: false
+        migrations:
+            enabled: true
+```
+
+### `kafka`
+
+Used by the [Kafka library](/modules/kafka) for consumer and producer definitions.
+
+### `sqs`
+
+Used by the [SQS library](/modules/sqs) for connection and consumer definitions.
+
+### `s3`
+
+Used by the [S3 library](/modules/s3) for connection credentials.
+
+### `doctrine`
+
+Used by the [Doctrine library](/modules/doctrine) for ORM/DBAL datasources and multi-tenant configuration.
+
+### `memdb`
+
+Used by the [Memdb library](/modules/memdb) for embedded server engine selection.
+
+### `dtce`
+
+Used by the [DTCE library](/modules/dtce) for queue, store, and worker configuration.
+
+### `eureka`, `consul`
+
+Used by the [Service Discovery library](/modules/eureka).
+
+### `redis`, `memcache`
+
+Used by the [Redis](/modules/data-redis) and [Memcache](/modules/data-memcache) client libraries respectively.
+
+### `security`
+
+Reserved for the planned [Security module](/modules/security). Not yet implemented.
+
+## Module-config file convention
+
+For libraries with substantial config, keep it in a dedicated file and reference it from `modules:`:
+
+```yaml application.yml
+modules:
+    - module: 'dev\winterframework\kafka\KafkaModule'
+      enabled: true
+      configFile: 'config/kafka-config.yml'
+```
+
+```yaml config/kafka-config.yml
+kafka:
+    consumers:
+        - name: my-consumer
+          # ...
+```
+
+The framework loads the referenced file and merges its keys into the property context so `#[Value]` and library beans can read them uniformly.

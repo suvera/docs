@@ -1,0 +1,91 @@
+---
+title: "Winter Data Memcache: Memcached Client Module"
+sidebarTitle: "Memcache"
+description: "Winter Data Memcache connects Winter Boot applications to Memcached servers using either the memcached or memcache PHP extension with Autowired templates."
+---
+
+Winter Data Memcache is a module that provides easy configuration and access to Memcached service from Winter Boot applications. It supports both the `memcached` and `memcache` PHP extensions through dedicated templates.
+
+<Note>
+  Client-only module. For the built-in framework caching abstraction see [Caching](/ops/caching); to launch an embedded Memcached server see [Memdb](/modules/memdb).
+</Note>
+
+## Setup
+
+```shell
+composer require suvera/winter-modules
+```
+
+Append the following code to your `application.yml`:
+
+```yaml
+modules:
+    - module: 'dev\winterframework\data\memcache\MemcacheModule'
+      enabled: true
+      configFile: memcache-config.yml
+```
+
+## Implementation
+
+PHP has two very good libraries that can be used to work with Memcache:
+
+1. [Memcached](https://www.php.net/manual/en/book.memcached.php)
+2. [Memcache](https://www.php.net/manual/en/book.memcache.php)
+
+One of these extensions is required.
+
+```shell
+pecl install memcached
+
+pecl install memcache
+```
+
+## Autowired Services
+
+This module provides the following services automatically available to you.
+
+### 1. MemcachedTemplate
+
+Available when the **memcached** PHP extension is installed.
+
+### 2. MemcacheTemplate
+
+Available when the **memcache** PHP extension is installed.
+
+#### Configuration (memcache-config.yml)
+
+```yaml
+# When **memcache** php extension installed.
+memcache:
+    -   name: bean01
+        idleTimeout: 30
+        timeout: 0
+        retry_interval: 0
+        status: 0
+        servers:
+            -   host: 127.0.0.1
+                port: 11211
+                weight: 0
+
+# When **memcached** php extension installed.
+memcached:
+    -   name: bean02
+        timeout: 0
+        idleTimeout: 30
+        retry_interval: 0
+        status: 0
+        servers:
+            -   host: 127.0.0.1
+                port: 11211
+                weight: 0
+```
+
+#### PHP Example
+
+```php
+#[Autowired("bean02")]
+private MemcachedTemplate $memcache1;
+
+#[Autowired("bean01")]
+private MemcacheTemplate $memcache2;
+```

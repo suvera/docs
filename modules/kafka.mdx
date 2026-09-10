@@ -1,0 +1,147 @@
+---
+title: "Winter Kafka: Kafka Producer and Consumer Module"
+sidebarTitle: "Kafka"
+description: "Winter Kafka lets you produce and consume Kafka messages in Winter Boot with swoole and rdkafka support. Configure groups, producers, and workers through YAML."
+---
+
+Winter Kafka is a module that provides easy configuration and access to Kafka functionality from Winter Boot applications. It takes care of wiring producers and consumer workers into the framework lifecycle, so you can send and receive events with only YAML configuration and focused worker classes.
+
+<Steps>
+  <Step title="Install PHP extensions">
+    Winter Kafka needs `swoole` and `rdkafka` installed via PECL.
+
+    ```shell
+    pecl install swoole
+    pecl install rdkafka
+    ```
+  </Step>
+  <Step title="Require the module">
+    Add the modules package with Composer.
+
+    ```shell
+    composer require suvera/winter-modules
+    ```
+  </Step>
+  <Step title="Enable in application.yml">
+    Register the module and point it to your config file.
+
+    ```yaml
+    modules:
+      - module: dev\winterframework\kafka\KafkaModule
+        enabled: true
+        configFile: kafka-config.yml
+    ```
+
+    `configFile` is a file path relative to your config directory or an absolute path.
+  </Step>
+</Steps>
+
+## kafka-config.yml
+
+The Kafka config declares your bootstrap servers, consumer groups, and named producers. You can apply global defaults with the reserved `__default__` name and override per group or producer as needed.
+
+```yaml
+bootstrap.servers: 127.0.0.1:9001
+
+# Consumer configuration and groups
+consumers:
+  - name: __default__
+    transientExceptions: []
+
+  - name: group1-name
+    topics: [topic1-name, topic99-name]
+    workerNum: 1
+    workerClass: some\package\className
+
+  - name: group2-name
+    topics: [topic2-name]
+    workerNum: 1
+    workerClass: some\package2\className2
+
+# Producer configuration
+producers:
+  - name: __default__
+    message.max.bytes: 10485760
+    retries: 5
+
+  - name: p-group1
+    topic: p-topic1
+
+  - name: p-group2
+    topic: p-topic2
+```
+
+## Autowired services
+
+`KafkaService` is available to applications by default. Consumer workers start automatically when the framework boots, and all producers are enabled by default.
+
+The reserved `"__default__"` consumer and producer entries can contain any [rdkafka settings](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md). Defaults apply to all producers and consumers; each individual entry may also specify its own rdkafka settings, which apply only to that producer or consumer.
+
+```php
+#[Autowired]
+private KafkaService $kafkaService;
+
+$this->kafkaService->produce(....message....);
+```
+
+## Consumer properties
+
+| Name | Required? | Description |
+| --- | --- | --- |
+| name | Yes | Consumer group name |
+| topic | Yes | (string) (alias to `topics`) Topic to consume. Either `topic` or `topics` is needed. |
+| topics | Yes | (array) (alias to `topic`) Array of topics to consume. Either `topic` or `topics` is needed. |
+| workerNum | Yes | Default value: `1`. Number of consumer workers to start. |
+| workerClass | Yes | Actual consumer class implementation. Must be derived from `AbstractConsumer`. |
+| statsCallback | No | Default value: `dev\winterframework\kafka\consumer\ConsumerLagMonitor`. Sets the statistics report callback; must be derived from `ConsumerStatisticsCallback`. Set `0` to disable. |
+| errorCallback | No | Default value: `dev\winterframework\kafka\consumer\ConsumerErrorCallbackDefault`. Sets the error callback, must be derived from `ConsumerErrorCallback`. Set `0` to disable. |
+| log_level | No | Default value: `6` (integer). Set log level value. EMERG = 0, ALERT = 1, CRIT = 2, ERR = 3, WARNING = 4, NOTICE = 5, INFO = 6, DEBUG = 7. |
+| logCallback | No | Default value: `dev\winterframework\kafka\KafkaLogCallbackDefault`. Sets the log callback; you will receive events according to `log_level`. Must be derived from `KafkaLogCallback`. Set `0` to disable. |
+| offsetCommitCallback | No | Default value: `(empty)`. Sets the offset commit callback for use with consumer groups. Must be derived from `ConsumerOffsetCommitCallback`. |
+| rebalanceCallback | Yes | Default value: `dev\winterframework\kafka\consumer\ConsumerRebalanceCallbackDefault`. Sets the rebalance callback for coordinated consumer group balancing. Must be derived from `ConsumerRebalanceCallback`. |
+| (Others) | - | [Full list of settings](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md) |
+
+## Producer properties
+
+| Name | Required | Description |
+| --- | --- | --- |
+| name | Yes | Producer name |
+| topic | Yes | (string) Message will be produced to this topic. |
+| log_level | No | Default value: `6` (integer). Set log level value. EMERG = 0, ALERT = 1, CRIT = 2, ERR = 3, WARNING = 4, NOTICE = 5, INFO = 6, DEBUG = 7. |
+| logCallback | No | Default value: `dev\winterframework\kafka\KafkaLogCallbackDefault`. Sets the log callback; you will receive events according to `log_level`. Must be derived from `KafkaLogCallback`. Set `0` to disable. |
+| (Others) | - | [Full list of settings](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md) |
+
+## How to write a consumer worker
+
+A consumer worker must implement the `Consumer` interface. In practice, extend `AbstractConsumer` and implement the `consume` method.
+
+```php
+class TestKafkaConsumer extends AbstractConsumer {
+
+    public function consume(ConsumerRecords $records): void {
+
+        foreach ($records as $record) {
+
+            // Do something with ConsumerRecord
+
+            /** @var ConsumerRecord $record */
+            self::logInfo("Received a message "
+                . ' Message: ' . $record->getValue()
+                . ', Topic: ' . $record->getTopic()
+                . ', Group: ' . $record->getGroupName()
+                . ', Time: ' . $record->getTimestamp()
+                . ', Headers: ' . json_encode($record->getHeaders())
+                . ', Offset: ' . $record->getOffset()
+                . ', Partition: ' . $record->getPartition()
+            );
+
+        }
+
+    }
+
+}
+```
+
+<Tip>
+  Related modules: [SQS](/modules/sqs) for AWS-managed queues and [DTCE](/modules/dtce) for task orchestration with a Kafka-backed queue.
+</Tip>

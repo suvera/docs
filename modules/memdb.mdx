@@ -1,0 +1,162 @@
+---
+title: "Winter Memdb: Embedded In-Memory Database Module"
+sidebarTitle: "Memdb"
+description: "Run embedded in-memory database engines (Redis, Apache Ignite, Memcached, Hazelcast) inside your Winter Boot application lifecycle with automatic startup and shutdown."
+---
+
+Winter Memdb runs embedded in-memory database engines (Redis, Apache Ignite, Memcached, and Hazelcast) as part of the application lifecycle, auto-starting on boot and stopping on shutdown.
+
+<Note>
+  Memdb launches and manages the server process for you. If you only need client access to an existing server, use the [Redis](/modules/data-redis) or [Memcache](/modules/data-memcache) modules instead.
+</Note>
+
+## Setup
+
+This module requires the `swoole` PHP extension.
+
+Install the package:
+
+```shell
+composer require suvera/winter-memdb
+```
+
+Enable the module in `application.yml`:
+
+```yaml
+modules:
+    -   module: dev\winterframework\memdb\MemdbModule
+        enabled: true
+        configFile: memdb-config.yml
+```
+
+`configFile` is a file path (relative to the config directory or an absolute path).
+
+## memdb-config.yml
+
+The configuration file can define any number of engines, each with its own top-level key:
+
+```yaml
+# Redis
+redis:
+# Redis Configuration here, see below section
+
+
+# Apache Ignite
+ignite:
+# Apache Ignite Configuration here
+
+
+# Memcached
+memcached:
+# Memcached Configuration here
+
+
+# Hazelcast
+hazelcast:
+# Hazelcast Configuration here
+```
+
+### 1. Redis
+
+```yaml
+redis:
+    -   name: redisServerBean01
+        serverBinary: /usr/local/bin/redis-server
+        confFile: redis_1.conf  # relative or absolute path
+        args: ""
+```
+
+Many server configurations are allowed. Client beans are auto-created by the framework using the given name, for example `redisServerBean01`.
+
+```php
+#[Autowired('redisServerBean01')]
+private PhpRedisTemplate $redis;
+```
+
+### 2. Apache Ignite
+
+```yaml
+ignite:
+    -   name: igniteServerBean01
+        serverBinary: /etc/apache-ignite-2.10.0/bin/ignite.sh
+        # Optional config
+        confFile: ignite-config.xml  # relative or absolute path
+        args: ""
+```
+
+Many server configurations are allowed. Client beans are auto-created by the framework using the given name, for example `igniteServerBean01`.
+
+```php
+#[Autowired('igniteServerBean01')]
+private IgniteCacheTemplate $ignite;
+```
+
+### 3. Memcached
+
+This requires the `memcached` or `memcache` PHP extension.
+
+```yaml
+memcached:
+    -   name: memcachedServerBean01
+        serverBinary: /usr/bin/memcached
+        host: 127.0.0.1
+        port: 11211
+        udpPort: 0
+        unixSocket:
+        pidfile: "/var/run/memcached_1.pid"
+        args: "-u memcached "
+```
+
+Many server configurations are allowed. Client beans are auto-created by the framework using the given name, for example `memcachedServerBean01`.
+
+```php
+// `memcached` php extension installed
+#[Autowired('memcachedServerBean01')]
+private MemcachedTemplate $memcached;
+
+// OR
+
+//  if `memcache` php extension installed
+#[Autowired('memcacheBean02')]
+private MemcacheTemplate $memcache;
+```
+
+### 4. Hazelcast
+
+Hazelcast needs the `memcached` PHP extension as a client:
+
+```shell
+pecl install memcached
+```
+
+Hazelcast configuration:
+
+```yaml
+hazelcast:
+    -   name: hazelcastBean01
+        serverBinary: etc/hazelcast-4.2.1/bin/start.sh
+        confFile: /etc/hazelcast/config/hazelcast.xml
+        bootUpTimeMs: 300
+        args: ""
+```
+
+Many server configurations are allowed. Client beans are auto-created by the framework using the given name, for example `hazelcastBean01`.
+
+```php
+#[Autowired('hazelcastBean01')]
+private MemcachedTemplate $hazelcast;
+```
+
+<Note>
+  Hazelcast configuration needs memcache enabled. See the Hazelcast documentation for details: [https://docs.hazelcast.com/imdg/4.2/clients/memcache.html](https://docs.hazelcast.com/imdg/4.2/clients/memcache.html)
+</Note>
+
+```xml
+<hazelcast>
+    ...
+    <network>
+        <memcache-protocol enabled="true"/>
+    </network>
+    ...
+</hazelcast>
+```

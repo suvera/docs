@@ -1,0 +1,114 @@
+---
+title: "Building CLI Commands with #[Command] Attribute"
+sidebarTitle: "CLI Commands"
+description: "Turn any bean into a command-line entry point with #[Command] and #[CommandArg], running under the WinterCliApplication runtime instead of the HTTP server."
+---
+
+Winter Boot ships two stereotypes for building command-line applications on top of the same DI container the rest of your services use. Any class marked with `#[Command]` becomes a first-class bean, its properties can be typed CLI arguments via `#[CommandArg]`, and the whole thing runs under `WinterCliApplication` instead of the Swoole HTTP runner.
+
+<Note>
+  The CLI programming model is stable at the attribute level, but higher-level docs and examples for command dispatch have not yet been published upstream. The definitive reference is the source under `src/stereotype/cli/` and the `WinterCliApplication` class.
+</Note>
+
+## The `#[Command]` attribute
+
+Apply `#[Command]` to a class to register it as a CLI command bean.
+
+```php src/cli/MigrateCommand.php
+<?php
+declare(strict_types=1);
+
+namespace com\example\cli;
+
+use dev\winterframework\stereotype\cli\Command;
+use dev\winterframework\stereotype\cli\CommandArg;
+
+#[Command(
+    name: 'migrate',
+    description: 'Run pending SQL or OpenSearch migrations',
+    help: 'Usage: myapp migrate --path=/migrations --mode=sql'
+)]
+class MigrateCommand
+{
+    #[CommandArg(
+        name: 'path',
+        required: true,
+        description: 'Directory containing migration files'
+    )]
+    private string $path;
+
+    #[CommandArg(
+        name: 'mode',
+        required: false,
+        description: 'Migration mode',
+        options: ['sql', 'opensearch']
+    )]
+    private string $mode = 'sql';
+}
+```
+
+### Constructor parameters
+
+| Parameter | Type | Purpose |
+| --- | --- | --- |
+| `name` | `string` | Command name shown on the CLI |
+| `description` | `string` | Short summary printed in help output |
+| `help` | `string` | Long-form help text |
+
+## The `#[CommandArg]` attribute
+
+Apply `#[CommandArg]` to a property to bind it to a named CLI argument. The framework infers the argument type from the property's PHP type hint.
+
+### Constructor parameters
+
+| Parameter | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `name` | `string` | property name | CLI argument name |
+| `required` | `bool` | `true` | Whether the argument must be supplied |
+| `description` | `string` | `''` | Help text for the argument |
+| `options` | `array` | `[]` | Static allowed values |
+| `optionsProvider` | `string` | `''` | Class name that implements `OptionsProvider` to compute allowed values dynamically |
+
+### Supported property types
+
+`#[CommandArg]` only accepts scalar property types. The following are valid:
+
+- `string`
+- `int`
+- `float`
+- `bool`
+
+Any other type throws a `TypeError` at container startup.
+
+If `optionsProvider` is set, the class name must implement `dev\winterframework\core\data\provider\OptionsProvider`, or the framework raises a `TypeError`.
+
+## Running as a CLI application
+
+Instead of `WinterWebSwooleApplication`, run the command bean under `WinterCliApplication`. It boots the same container (modules, beans, `#[OnApplicationReady]` hooks) without starting the HTTP server.
+
+```php bin/myapp.php
+<?php
+
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterCliApplication;
+
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/../config'],
+    scanNamespaces: [['com\\example\\myapp', __DIR__ . '/../src']]
+)]
+class MyCliApp
+{
+    public static function main(): void
+    {
+        (new WinterCliApplication())->run(MyCliApp::class);
+    }
+}
+
+MyCliApp::main();
+```
+
+## Related pages
+
+- [Application lifecycle](/core/application-lifecycle) covers boot ordering and `#[OnApplicationReady]`, which fires the same way for CLI and web apps.
+- [Dependency injection](/core/dependency-injection) applies to command classes: `#[Autowired]` any service you need.
+- [SQL migrations](/data/migrations) and [OpenSearch migrations](/data/opensearch-migrations) ship a ready-to-use CLI (`bin/migrate.php`) built with the same model.

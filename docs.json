@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "luma",
-  "name": "Winter Boot",
+  "name": "Winter",
   "colors": {
     "primary": "#1be39b",
     "light": "#0c8c5c"
@@ -10,7 +10,7 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Documentation",
+        "tab": "Framework",
         "groups": [
           {
             "group": "Getting Started",
@@ -25,7 +25,8 @@
             "pages": [
               "core/dependency-injection",
               "core/aop",
-              "core/application-lifecycle"
+              "core/application-lifecycle",
+              "core/module-system"
             ]
           },
           {
@@ -37,38 +38,105 @@
             ]
           },
           {
-            "group": "Data Access",
+            "group": "Data",
             "pages": [
               "data/database",
               "data/transactions",
-              "data/migrations"
+              "data/migrations",
+              "data/opensearch-migrations"
             ]
           },
           {
-            "group": "Async & Scheduling",
+            "group": "Async & Concurrency",
             "pages": [
               "async/async-tasks",
               "async/scheduling",
-              "async/daemon-threads"
+              "async/daemon-threads",
+              "ops/locking"
             ]
           },
           {
             "group": "Operations",
             "pages": [
               "ops/caching",
-              "ops/locking",
               "ops/logging",
               "ops/actuator",
               "ops/telemetry"
             ]
           },
           {
-            "group": "Advanced",
+            "group": "Building Applications",
             "pages": [
-              "advanced/modules",
+              "building/cli-commands",
+              "building/testing",
               "advanced/json-xml",
               "advanced/local-stores",
+              "building/utilities",
               "advanced/build-deploy"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Libraries",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "modules/overview"
+            ]
+          },
+          {
+            "group": "Data",
+            "pages": [
+              "modules/doctrine",
+              "modules/data-redis",
+              "modules/data-memcache"
+            ]
+          },
+          {
+            "group": "Embedded In-Memory Servers",
+            "pages": [
+              "modules/memdb"
+            ]
+          },
+          {
+            "group": "Messaging",
+            "pages": [
+              "modules/kafka",
+              "modules/sqs"
+            ]
+          },
+          {
+            "group": "Storage & Search",
+            "pages": [
+              "modules/s3",
+              "modules/opensearch"
+            ]
+          },
+          {
+            "group": "Distributed Systems",
+            "pages": [
+              "modules/eureka",
+              "modules/dtce"
+            ]
+          },
+          {
+            "group": "Planned",
+            "pages": [
+              "modules/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/attributes",
+              "reference/application-yml"
             ]
           }
         ]

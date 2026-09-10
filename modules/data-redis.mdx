@@ -1,0 +1,210 @@
+---
+title: "Winter Data Redis: PhpRedis Client Module"
+sidebarTitle: "Redis"
+description: "Winter Data Redis provides PhpRedis-backed templates for single nodes, clusters, arrays, sentinels, and Dynomite token rings in Winter Boot applications."
+---
+
+Winter Data Redis is a module that provides easy configuration and access to Redis from Winter Boot applications. It supports single nodes, Redis Cluster, Redis Arrays, Redis Sentinel, and token-based ring topologies such as Netflix Dynomite through the PhpRedis extension.
+
+<Note>
+  This is a CLIENT module that connects to existing Redis servers. If you want the framework to launch and manage an embedded Redis server, use the [Memdb](/modules/memdb) module instead.
+</Note>
+
+## Setup
+
+```shell
+composer require suvera/winter-modules
+```
+
+Append the following code to your `application.yml`:
+
+```yaml
+modules:
+    - module: 'dev\winterframework\data\redis\RedisModule'
+      enabled: true
+      configFile: redis-config.yml
+```
+
+## Implementation
+
+PHP has two very good libraries that can be used to work with Redis:
+
+1. [PhpRedis](https://github.com/phpredis/phpredis) - C Extension
+2. [Predis](https://github.com/predis/predis) - Pure PHP Implementation
+
+This module assumes that you have the [PhpRedis](https://github.com/phpredis/phpredis) extension already installed.
+
+<Note>
+  If you are interested in using Predis, contributions for a PredisTemplate are welcomed.
+</Note>
+
+## Autowired Services
+
+This module provides the following services automatically available to you.
+
+### 1. PhpRedisTemplate
+
+Use `PhpRedisTemplate` when dealing with single Redis node(s).
+
+#### Configuration for PhpRedisTemplate (redis-config.yml)
+
+```yaml
+phpredis:
+    singles:
+        -   name: redisNode01Bean
+            host: 192.168.1.10
+            port: 6379
+
+        -   name: redisNode02Bean
+            host: 192.168.1.12
+            port: 6379
+```
+
+#### PHP Example
+
+```php
+#[Autowired]
+private PhpRedisTemplate $redis;  // This defaults to "redisNode01Bean"
+
+#[Autowired("redisNode01Bean")]
+private PhpRedisTemplate $redis1;  // This is also the same object as above, but with named Autowired
+
+#[Autowired("redisNode02Bean")]
+private PhpRedisTemplate $redis2;
+```
+
+### 2. PhpRedisClusterTemplate
+
+Use `PhpRedisClusterTemplate` when dealing with [Redis Cluster](https://github.com/phpredis/phpredis/blob/develop/cluster.markdown#readme).
+
+<Note>
+  If you are interested in using Predis, contributions for a PredisClusterTemplate are welcomed.
+</Note>
+
+#### Configuration for PhpRedisClusterTemplate (redis-config.yml)
+
+```yaml
+phpredis:
+    clusters:
+        -   name: cluster01Bean
+            clusterName: cluster01
+            hosts: [ 192.168.1.10:6379, 192.168.1.11:6379, 192.168.1.12:6379]
+
+        -   name: cluster02Bean
+            clusterName: cluster02
+            hosts: [ 192.168.1.14:6379, 192.168.1.15:6379]
+```
+
+#### PHP Example
+
+```php
+#[Autowired]
+private PhpRedisClusterTemplate $redis;  // This defaults to "cluster01Bean"
+
+#[Autowired("cluster01Bean")]
+private PhpRedisClusterTemplate $redis1;  // This is also the same object as above, but with named Autowired
+
+#[Autowired("cluster02Bean")]
+private PhpRedisClusterTemplate $redis2;
+```
+
+### 3. PhpRedisArrayTemplate
+
+Use `PhpRedisArrayTemplate` when dealing with [Redis Arrays](https://github.com/phpredis/phpredis/blob/develop/arrays.markdown#readme).
+
+#### Configuration for PhpRedisArrayTemplate (redis-config.yml)
+
+```yaml
+phpredis:
+    arrays:
+        -   name: beanUniqueName01
+            arrayName: arrayName01
+            hosts: [192.168.1.10:6379, 192.168.1.11:6379, 192.168.1.12:6379],
+            options:
+                -   consistent: true
+                    auth: mysecretpassword
+                    function: extract_key_part_func
+                    previous: [ ]
+                    retry_timeout: 0
+                    lazy_connect: false
+                    connect_timeout: 0.5
+                    read_timeout: 0.5
+                    algorithm: sha256
+                    distributor: dist_func
+```
+
+#### PHP Example
+
+```php
+#[Autowired]
+private PhpRedisArrayTemplate $redis;  // This defaults to "beanUniqueName01"
+
+#[Autowired("beanUniqueName01")]
+private PhpRedisArrayTemplate $redis1;  // This is also the same object as above, but with named Autowired
+```
+
+### 4. PhpRedisSentinelTemplate
+
+Use `PhpRedisSentinelTemplate` when dealing with [Redis Sentinel](https://github.com/phpredis/phpredis/blob/develop/sentinel.markdown#readme).
+
+#### Configuration for PhpRedisSentinelTemplate (redis-config.yml)
+
+```yaml
+phpredis:
+    sentinels:
+        -   name: sentinel01
+            persistence: true
+            host: 127.0.0.1
+            port: 6379
+            timeout: 0
+            readTimeout: 0
+```
+
+#### PHP Example
+
+```php
+#[Autowired]
+private PhpRedisSentinelTemplate $redis;  // This defaults to "sentinel01"
+```
+
+### 5. PhpRedisTokenTemplate
+
+Use `PhpRedisTokenTemplate` when dealing with token-based ring topology Redis clusters such as [Netflix Dynomite](https://github.com/Netflix/dynomite).
+
+#### Configuration for PhpRedisTokenTemplate (redis-config.yml)
+
+```yaml
+phpredis:
+    tokens:
+        # 1st Cluster
+        -   name: DynomiteCluster01
+            hosts:
+                -   host: 10.1.2.3
+                    port: 7801
+                    token: 4294967295
+                -   host: 10.1.2.4
+                    port: 7801
+                    token: 2863311530
+                -   host: 10.1.2.5
+                    port: 7801
+                    token: 1431655765
+            persistence: false
+            strictTokenRing: false
+            timeout: 0
+            retryInterval:
+            reserved:
+            readTimeout: 0
+            idleTimeout: 300
+            hashProvider: dev\winterframework\util\hash\MurmurHash3Provider
+
+        # 2nd Cluster
+        -   name: DynomiteCluster02
+            # ...settings here ...
+```
+
+#### PHP Example
+
+```php
+#[Autowired("DynomiteCluster01")]
+private PhpRedisTokenTemplate $redis;
+```

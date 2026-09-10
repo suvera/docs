@@ -1,0 +1,74 @@
+---
+title: "Testing Winter Boot Applications with #[WinterBootTest]"
+sidebarTitle: "Testing"
+description: "Mark test classes as beans with #[WinterBootTest] and run the framework's zero-dependency test harness to exercise services against a real application context."
+---
+
+Winter Boot ships a `#[WinterBootTest]` stereotype that registers a class as a first-class bean during startup, plus a small zero-dependency test runner (`srcTests/run.php`) that the framework itself uses. Together they let you write integration tests that exercise your services against a real DI container without pulling in PHPUnit.
+
+## The `#[WinterBootTest]` attribute
+
+Apply `#[WinterBootTest]` to any class. The container treats it the same way it treats `#[Service]` or `#[Component]`: it registers the class as a bean, resolves its dependencies via `#[Autowired]`, and runs its `#[PostConstruct]` hooks.
+
+```php srcTests/UserServiceTest.php
+<?php
+declare(strict_types=1);
+
+namespace com\example\test;
+
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\test\WinterBootTest;
+
+#[WinterBootTest]
+class UserServiceTest
+{
+    #[Autowired]
+    private UserService $users;
+
+    public function testCreateUser(): void
+    {
+        $id = $this->users->create('alice', 'alice@example.com');
+        // assert on $id
+    }
+}
+```
+
+The attribute lives at `dev\winterframework\stereotype\test\WinterBootTest`.
+
+## The bundled test runner
+
+Winter Boot's own tests use a plain PHP runner with no external dependencies. You can lift the same pattern into your project.
+
+### Run
+
+From the repository root:
+
+```bash
+php srcTests/run.php
+```
+
+The exit code is `0` when all tests pass and `1` otherwise.
+
+### Layout
+
+- `run.php` discovers `*Test.php` files in the directory and runs every public `test*` method, printing `ok` or `FAIL` per test plus a pass/fail summary.
+- `Support/TestCase.php` is a base class with `assertSame`, `assertTrue`, `assertFalse`, `assertNull`, and `assertThrows`. Assertion failures throw `AssertionFailed`.
+- `Support/StubPropertySource.php` is an in-memory `PropertySource` for tests. Choose the dataset via the `dataset` key of the `propertySources` entry in the fixture yml, and register rows in `StubPropertySource::$datasets` before building the context.
+- `fixtures/<name>/application.yml` is a config directory you pass to `new WinterPropertyContext(['.../fixtures/<name>'])`.
+
+### Add a test
+
+<Steps>
+  ### Create the test file
+
+  Create `SomethingTest.php` in `srcTests/`, namespace `winterBootTests`, class `SomethingTest extends \winterBootTests\Support\TestCase`.
+
+  ### Add public `test*` methods
+
+  Add public methods starting with `test`. No registration is needed; `run.php` picks the file up automatically.
+</Steps>
+
+## Related pages
+
+- [Dependency injection](/core/dependency-injection) explains how the container resolves `#[Autowired]` dependencies in test beans.
+- [Application lifecycle](/core/application-lifecycle) covers container boot order that also applies to test contexts.

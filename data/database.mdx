@@ -6,6 +6,10 @@ description: "Set up datasources, inject PdbcTemplate, execute typed queries, ma
 
 Winter Boot's database layer wraps PHP's native PDO (and optional OCI) extensions behind the `PdbcTemplate` interface, giving you a clean, injection-friendly API for executing SQL without managing connections, prepared statements, or result-set iteration yourself. Each configured datasource automatically produces a named `PdbcTemplate` bean and a transaction manager bean you can inject anywhere in your application.
 
+<Tip>
+  Need full ORM entities and repositories instead of raw SQL? The [Winter Doctrine module](/modules/doctrine) plugs Doctrine ORM and DBAL into the same datasource configuration.
+</Tip>
+
 ## Datasource Configuration
 
 Declare datasources in `application.yml` under the top-level `datasource` key. You may configure as many datasources as you need — mark exactly one as the primary with `isPrimary: true`.

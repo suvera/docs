@@ -1,10 +1,26 @@
 ---
-title: "Introduction to Winter Boot PHP Microservices Framework"
+title: "Introduction to Winter: PHP Microservices Ecosystem"
 sidebarTitle: "Introduction"
-description: "Winter Boot is a PHP 8 microservices framework inspired by Spring Boot, with attribute-driven DI, AOP, REST routing, async tasks, and caching."
+description: "Winter is a PHP 8 microservices ecosystem: Winter Boot at the core plus optional libraries for data, messaging, storage, search, and service discovery."
 ---
 
-Winter Boot is a modern PHP framework purpose-built for microservice development, drawing deep inspiration from Spring Boot's philosophy of convention over configuration. It brings first-class support for PHP 8 attributes to deliver a declarative, annotation-driven programming model — covering dependency injection, AOP-based cross-cutting concerns, REST API routing, async task execution, caching, transactions, and scheduling — so that teams already familiar with the Java/Spring ecosystem can be productive in PHP immediately.
+Winter is a PHP 8 microservices ecosystem built around **Winter Boot**, a Spring Boot-inspired framework for attribute-driven services, and a small family of optional libraries that plug into it for databases, caching, messaging, storage, search, and service discovery. This page introduces the pieces so you can pick what you need before diving into the framework or a specific library.
+
+## The ecosystem at a glance
+
+Winter is deliberately modular. You install the framework, then add only the libraries that match your infrastructure.
+
+| Package | What it gives you | When to reach for it |
+| --- | --- | --- |
+| `suvera/winter-boot` | The framework core: DI, AOP, REST, PDBC, transactions, migrations, async, scheduling, actuator, telemetry | Always |
+| `suvera/winter-doctrine` | Doctrine ORM and DBAL plus multi-tenant datasources | You need ORM entities or Doctrine DBAL |
+| `suvera/winter-modules` | 8 official integration modules (Kafka, SQS, S3, OpenSearch, Redis, Memcache, DTCE, Security) | You integrate with those systems |
+| `suvera/winter-memdb` | Embedded in-memory servers (Redis, Ignite, Memcached, Hazelcast) launched by the app | You want the app to manage the cache/database server |
+| `suvera/winter-eureka` | Service discovery via Consul or Netflix Eureka | You run multiple service instances behind discovery |
+
+<Card title="See the Libraries tab" icon="puzzle-piece" href="/modules/overview">
+  Full catalog of official libraries, with per-need guidance and links to each integration's dedicated page.
+</Card>
 
 ## What is Winter Boot?
 
@@ -32,10 +48,10 @@ MyApplication::main();
 ```
 
 <Note>
-  Winter Boot requires **PHP 8.4 or later**. The Swoole extension (`pecl install swoole`) is required for the built-in HTTP server (`WinterWebSwooleApplication`) and is strongly recommended for async functions (`#[Async]`) and scheduled tasks (`#[Scheduled]`). All other framework features work without Swoole.
+  Winter Boot requires **PHP 8.4 or later**; the official libraries pin to **PHP 8.5**. The Swoole extension (`pecl install swoole`) is required for the built-in HTTP server (`WinterWebSwooleApplication`), the async and scheduled tasks (`#[Async]`, `#[Scheduled]`), and several libraries (Memdb, Eureka, Kafka, DTCE). Non-Swoole framework features work without it.
 </Note>
 
-## Key Features
+## Key features
 
 Explore what Winter Boot can do for your microservices project.
 
@@ -61,8 +77,8 @@ Explore what Winter Boot can do for your microservices project.
   <Card title="Async & Scheduling" icon="clock" href="/async/async-tasks">
     Run background work with `#[Async]` and cron-style scheduling with `#[Scheduled]`.
   </Card>
-  <Card title="Modules & Extensions" icon="puzzle-piece" href="/advanced/modules">
-    Extend the framework with community modules or build your own by implementing `WinterModule`.
+  <Card title="Module System" icon="puzzle-piece" href="/core/module-system">
+    Extend the framework with community libraries or build your own by implementing `WinterModule`.
   </Card>
 </CardGroup>
 
@@ -72,8 +88,8 @@ Before you install Winter Boot, make sure your environment meets these prerequis
 
 | Requirement | Version / Notes |
 |---|---|
-| PHP | 8.4 or later |
-| Swoole extension | Required for HTTP server, `#[Async]`, and `#[Scheduled]` |
+| PHP | 8.4 or later (8.5 recommended, required by official libraries) |
+| Swoole extension | Required for HTTP server, `#[Async]`, `#[Scheduled]`, and several libraries |
 | Composer | Any recent version |
 
 Install the Swoole extension via PECL:
@@ -89,9 +105,9 @@ php -v
 php -r "echo phpversion('swoole');"
 ```
 
-## Spring Boot Inspiration
+## Spring Boot inspiration
 
-If you have built services with Spring Boot, Winter Boot will feel immediately familiar. Stereotype attributes map directly to their Spring counterparts — only the language changes.
+If you have built services with Spring Boot, Winter Boot will feel immediately familiar. Stereotype attributes map directly to their Spring counterparts; only the language changes.
 
 | Spring Boot (Java) | Winter Boot (PHP) |
 |---|---|
@@ -110,7 +126,7 @@ If you have built services with Spring Boot, Winter Boot will feel immediately f
 
 The application context lifecycle, property externalisation via `application.yml`, and the concept of a single annotated entry-point class all follow the same patterns as Spring Boot.
 
-## PHP 8 Attributes and Dependency Injection
+## PHP 8 attributes and dependency injection
 
 Winter Boot's DI container is built entirely on native PHP 8 attributes. There are no XML files, no code-generation steps, and no service locators to call manually. Declare a class with `#[Service]` or `#[Component]`, mark a property with `#[Autowired]`, and the container resolves the dependency graph automatically at startup.
 
@@ -133,14 +149,14 @@ class UserServiceImpl implements UserService
 }
 ```
 
-## Aspect-Oriented Programming
+## Aspect-oriented programming
 
-Cross-cutting concerns such as caching, transactions, retries, and custom interceptors are expressed as attributes applied to methods and classes. The AOP weaving happens at container startup — no proxy code to write, no separate aspect files to maintain.
+Cross-cutting concerns such as caching, transactions, retries, and custom interceptors are expressed as attributes applied to methods and classes. The AOP weaving happens at container startup, with no proxy code to write and no separate aspect files to maintain.
 
 <Tip>
   See the [AOP & Custom Stereotypes](/core/aop) page for a full walkthrough of defining aspects, join points, and custom stereotype attributes.
 </Tip>
 
-## Microservices Focus
+## Microservices focus
 
-Winter Boot is optimised for the microservice deployment model: stateless HTTP workers managed by Swoole, an optional in-process key-value store and task queue, built-in Prometheus metrics via the Actuator, and an extensible module system for integrations with Redis, Kafka, Doctrine ORM, Amazon SQS/S3, OpenSearch, and service-discovery solutions such as Consul and Netflix Eureka.
+Winter Boot is optimised for the microservice deployment model: stateless HTTP workers managed by Swoole, an optional in-process key-value store and task queue, built-in Prometheus metrics via the Actuator, and an extensible module system for integrations with Redis, Kafka, Doctrine ORM, Amazon SQS/S3, OpenSearch, and service-discovery solutions such as Consul and Netflix Eureka. See the [Libraries overview](/modules/overview) for the full catalog and guidance on choosing the right library.

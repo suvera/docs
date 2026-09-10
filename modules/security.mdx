@@ -1,0 +1,30 @@
+---
+title: "Winter Security: Planned Application Security Module"
+sidebarTitle: "Security"
+description: "Winter Security is a planned Winter Boot module. The winter-security package is reserved in the winter-modules monorepo but does not yet ship implementation code."
+---
+
+Winter Security is a placeholder module in the `suvera/winter-modules` monorepo. This page documents its current state so you know what to expect when the module ships.
+
+<Warning>
+  This module is not yet released. The `winter-security` directory in the monorepo contains no PHP source, only a `keepme.txt` placeholder. The README in that directory references a module class path (`dev\winterframework\data\redis\SecurityModule`) that does not exist in the codebase. Do not enable this module in `application.yml`; it will fail to load.
+</Warning>
+
+## Current state
+
+- Package: bundled inside `suvera/winter-modules`
+- Autoload namespace reserved: `dev\winterframework\security\` (per the monorepo `composer.json`)
+- Source directory: `winter-security/src/` (empty, contains only `keepme.txt`)
+- No `WinterModule` implementation exists yet
+
+## When it ships
+
+Watch the [winter-security directory](https://github.com/suvera/winter-modules/tree/master/winter-security) on GitHub for updates. Once a real `SecurityModule` class lands, this page will be replaced with configuration, autowired beans, and usage examples.
+
+## In the meantime
+
+If you need to secure a Winter Boot application today, handle it in your own code:
+
+- Protect routes with a custom [interceptor](/web/interceptors) that authenticates requests before they reach the controller.
+- Enforce authorisation inside services with a [custom AOP stereotype](/core/aop) attached to controller or service methods.
+- Manage session or API-key state with the [Local Stores](/advanced/local-stores) KV backend or an external store connected via the [Redis module](/modules/data-redis).

@@ -6,6 +6,10 @@ description: "Run versioned SQL scripts against any datasource, track applied mi
 
 Winter Boot includes a standalone SQL migration tool that executes plain `.sql` files against your configured datasources and tracks each applied migration in a `winter_migrations` table. Version state is determined by the relative file path — if a path has already been recorded in the tracking table, the file is skipped on subsequent runs. This gives you repeatable, idempotent deploys without requiring any migration-specific DSL.
 
+<Tip>
+  The same runner also applies JSON-based OpenSearch index templates, ISM policies, and index schemas. See [OpenSearch Migrations](/data/opensearch-migrations).
+</Tip>
+
 ## Quick Start
 
 Follow these steps to apply your first migration:
@@ -148,7 +152,7 @@ When `useCli: true` is set, Winter Boot selects the appropriate CLI tool based o
 
 Organise migration files under a root directory with one sub-folder per datasource name. Files are executed in **alphabetical order** — use numeric or date-based prefixes to enforce a deterministic sequence.
 
-```
+```text
 /migrations/
 ├── defaultdb/                    # matches datasource name "defaultdb"
 │   ├── 001-init-schema.sql

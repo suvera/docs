@@ -1,0 +1,129 @@
+---
+title: "Attribute Reference: Every Winter Boot Stereotype"
+sidebarTitle: "Attributes"
+description: "One-stop reference for every PHP 8 attribute Winter Boot ships: application, DI, web, data, async, caching, transactions, actuator, CLI, and testing."
+---
+
+Winter Boot uses PHP 8 attributes for its entire programming model. This page indexes every attribute the framework exposes, grouped by the concern it belongs to, with a one-line meaning and a link to the concept page that documents its usage.
+
+## Application bootstrap
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[WinterBootApplication]` | `dev\winterframework\stereotype` | Marks the entry-point class and configures scan paths, config directories, and enabled features. |
+| `#[Configuration]` | `dev\winterframework\stereotype` | Declares a bean-producing class whose `#[Bean]` methods contribute beans to the container. |
+| `#[PostConstruct]` | `dev\winterframework\stereotype` | Marks a bean method to run after all dependencies are injected. |
+| `#[OnApplicationReady]` | `dev\winterframework\stereotype` | Marks a bean method to run once the application context is fully ready. |
+| `#[Module]` | `dev\winterframework\stereotype` | Registers a class as a Winter module (see [Module System](/core/module-system)). |
+
+## Dependency injection
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[Service]` | `dev\winterframework\stereotype` | Registers a service-layer bean. |
+| `#[Component]` | `dev\winterframework\stereotype` | Registers a generic bean. |
+| `#[Autowired]` | `dev\winterframework\stereotype` | Injects a dependency into a property or constructor parameter. |
+| `#[Bean]` | `dev\winterframework\stereotype` | Marks a `#[Configuration]` method as a bean factory. |
+| `#[Qualifier]` | `dev\winterframework\stereotype` | Disambiguates between beans of the same type by name. |
+| `#[Value]` | `dev\winterframework\stereotype` | Injects a property or config value into a field. |
+| `#[JsonProperty]` | `dev\winterframework\stereotype` | Maps a PHP property to a JSON key for (de)serialisation. |
+
+Read [Dependency Injection](/core/dependency-injection) for full usage.
+
+## Web and REST
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[RestController]` | `dev\winterframework\stereotype` | Declares a REST controller bean. |
+| `#[RequestMapping]` | `dev\winterframework\stereotype\web` | Maps a class or method to an HTTP path. |
+| `#[GetMapping]` | `dev\winterframework\stereotype\web` | Maps a method to `GET`. |
+| `#[PostMapping]` | `dev\winterframework\stereotype\web` | Maps a method to `POST`. |
+| `#[PutMapping]` | `dev\winterframework\stereotype\web` | Maps a method to `PUT`. |
+| `#[PatchMapping]` | `dev\winterframework\stereotype\web` | Maps a method to `PATCH`. |
+| `#[DeleteMapping]` | `dev\winterframework\stereotype\web` | Maps a method to `DELETE`. |
+| `#[PathVariable]` | `dev\winterframework\stereotype\web` | Binds a URI path segment to a parameter. |
+| `#[RequestParam]` | `dev\winterframework\stereotype\web` | Binds a query-string parameter. |
+| `#[RequestBody]` | `dev\winterframework\stereotype\web` | Binds the deserialised request body. |
+
+See [REST Controllers](/web/rest-controllers) and [Request Mapping](/web/request-mapping).
+
+## Data, PPA, and transactions
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[Table]` | `dev\winterframework\stereotype\ppa` | Maps a PHP class to a database table. |
+| `#[Column]` | `dev\winterframework\stereotype\ppa` | Maps a PHP property to a column. |
+| `#[SequenceGenerator]` | `dev\winterframework\stereotype\ppa` | Declares a sequence-backed ID generator. |
+| `#[TableGenerator]` | `dev\winterframework\stereotype\ppa` | Declares a table-backed ID generator. |
+| `#[EnableTransactionManagement]` | `dev\winterframework\stereotype\txn` | Enables `#[Transactional]` on the application. |
+| `#[Transactional]` | `dev\winterframework\txn\stereotype` | Wraps a method in a database transaction. |
+
+See [Datasources](/data/database), [Transactions](/data/transactions), [SQL Migrations](/data/migrations), and [OpenSearch Migrations](/data/opensearch-migrations).
+
+## Async, scheduling, and concurrency
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[EnableAsync]` | `dev\winterframework\stereotype\task` | Enables `#[Async]` on the application. |
+| `#[Async]` | `dev\winterframework\task\async\stereotype` | Dispatches a method to a background worker. |
+| `#[EnableScheduling]` | `dev\winterframework\stereotype\task` | Enables `#[Scheduled]` on the application. |
+| `#[Scheduled]` | `dev\winterframework\task\scheduling\stereotype` | Runs a method on a cron or fixed-delay schedule. |
+| `#[DaemonThread]` | `dev\winterframework\stereotype\cli` | Runs a bean method as a long-lived daemon thread. |
+| `#[Lockable]` | `dev\winterframework\stereotype\concurrent` | Serialises method execution across processes. |
+
+See [Async Tasks](/async/async-tasks), [Scheduled Tasks](/async/scheduling), [Daemon Threads](/async/daemon-threads), and [Locking](/ops/locking).
+
+## Caching
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[EnableCaching]` | `dev\winterframework\stereotype\cache` | Enables method-level caching attributes. |
+| `#[Cacheable]` | `dev\winterframework\cache\stereotype` | Caches a method's return value. |
+| `#[CachePut]` | `dev\winterframework\cache\stereotype` | Updates the cached entry after a method runs. |
+| `#[CacheEvict]` | `dev\winterframework\cache\stereotype` | Invalidates cached entries. |
+
+See [Caching](/ops/caching).
+
+## AOP
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[AopStereoType]` | `dev\winterframework\stereotype\aop` | Marks a custom attribute as an AOP stereotype. |
+| `#[WinterAspect]` | `dev\winterframework\stereotype\aop` | Marks a class as an aspect implementation. |
+
+See [AOP & Custom Stereotypes](/core/aop).
+
+## Actuator
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[HealthInformer]` | `dev\winterframework\actuator\stereotype` | Contributes a health check to the actuator endpoint. |
+| `#[InfoInformer]` | `dev\winterframework\actuator\stereotype` | Contributes an info payload to the actuator endpoint. |
+
+See [Actuator](/ops/actuator).
+
+## CLI
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[Command]` | `dev\winterframework\stereotype\cli` | Registers a class as a CLI command bean. |
+| `#[CommandArg]` | `dev\winterframework\stereotype\cli` | Binds a property to a named CLI argument. |
+
+See [CLI Commands](/building/cli-commands).
+
+## Testing
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[WinterBootTest]` | `dev\winterframework\stereotype\test` | Registers a test class as a bean during test runs. |
+
+See [Testing](/building/testing).
+
+## Utility
+
+| Attribute | Namespace | Purpose |
+| --- | --- | --- |
+| `#[UriPath]` | `dev\winterframework\stereotype\util` | Marks a URI path template. |
+| `#[UriPathPart]` | `dev\winterframework\stereotype\util` | Marks a URI path segment. |
+| `#[NamedComponent]` | `dev\winterframework\stereotype\util` | Names a component for lookup. |
+| `#[ComponentName]` | `dev\winterframework\stereotype\util` | Reads a component's registered name. |

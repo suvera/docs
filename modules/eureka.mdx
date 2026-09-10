@@ -1,0 +1,81 @@
+---
+title: "Winter Eureka: Service Discovery Module"
+sidebarTitle: "Eureka"
+description: "Set up service discovery in Winter Boot with Consul.io or Netflix Eureka. Configure discovery clients, install the module, and autowire clients in your PHP application."
+---
+
+Winter Eureka is a module that provides easy configuration and access to service discovery functionality from Winter Boot applications. It supports both [Consul.io](https://www.consul.io/use-cases/service-discovery-and-health-checking) and [Netflix Eureka](https://github.com/Netflix/eureka), and requires the `swoole` PHP extension.
+
+## Setup
+
+<Steps>
+  <Step title="Install the swoole extension">
+    Winter Eureka requires the `swoole` PHP extension. Make sure it is installed and enabled in your environment before proceeding.
+  </Step>
+  <Step title="Install the package">
+    ```shell
+    composer require suvera/winter-eureka
+    ```
+  </Step>
+  <Step title="Enable the module">
+    Append the following block to your `application.yml`:
+
+    ```yaml
+    modules:
+        - module: dev\winterframework\eureka\EurekaModule
+          enabled: true
+          configFile: eureka-config.yml
+    ```
+
+    The `configFile` value is a file path, either relative to the config directory or an absolute path.
+  </Step>
+</Steps>
+
+## eureka-config.yml
+
+Create `eureka-config.yml` in your config directory. The file supports configuring connections for both Consul.io and Netflix Eureka.
+
+```yaml
+# Consul.io
+consul:
+    -   name: consulBean01
+        serviceUrl: http://127.0.0.1:8500
+        authType: Basic
+        credentials:
+        credentialFile:
+        dataCenter:
+        waitTimeSecs:
+        consulToken:
+        consulTokenFile:
+        ignoreSsl:
+        caFile:
+        certFile:
+        keyFile:
+
+
+# Netflix Eureka
+eureka:
+    -   name: netflixBean01
+        serviceUrl: http://localhost:8761/eureka
+        authType: Basic
+        credentials:
+        credentialFile:
+        ignoreSsl:
+
+# End
+```
+
+## Autowiring
+
+Service and client beans defined in `eureka-config.yml` can be autowired into your PHP classes:
+
+```php
+#[Autowired('consulBean01')]
+protected DiscoveryClient $discoveryClient;
+
+
+#[Autowired('netflixBean01')]
+protected EurekaClient $eurekaClient;
+```
+
+For details on the module system, refer to [The Module System](/core/module-system).

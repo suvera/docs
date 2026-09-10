@@ -4,7 +4,7 @@ sidebarTitle: "Build & Deploy"
 description: "Package Winter Boot apps as Phar archives or Docker images, pick the right application runner, and manage processes with systemd or Kubernetes."
 ---
 
-Winter Boot applications can be shipped in several ways depending on your infrastructure: as a self-contained Phar archive for bare-metal hosts, as a Docker image for containerised deployments, or via standard PHP-FPM for environments that already manage PHP processes. The framework ships with a sample init.d script and Docker base image to get you started quickly. A fully working example — including a `Dockerfile`, `build.xml`, and `docker-compose.yml` — is available in the `suvera/winter-example-service` repository.
+Winter Boot applications can be shipped in several ways depending on your infrastructure: as a self-contained Phar archive for bare-metal hosts, as a Docker image for containerised deployments, or via standard PHP-FPM for environments that already manage PHP processes. The framework ships with a sample init.d script and Docker base image to get you started quickly. A fully working example, including a `Dockerfile` and a `box.json` build manifest, is available in the `suvera/winter-example-service` repository.
 
 ## Choose an Application Runner
 
@@ -281,11 +281,8 @@ The `suvera/winter-example-service` repository demonstrates a complete Winter Bo
   <Card title="Dockerfile" icon="docker">
     A production-ready multi-stage `Dockerfile` built on the Winter Boot base image.
   </Card>
-  <Card title="Ant build.xml" icon="hammer">
-    An Ant `build.xml` for Phar packaging, suitable for CI/CD pipelines.
-  </Card>
-  <Card title="docker-compose.yml" icon="layer-group">
-    A `docker-compose.yml` for local development with all dependencies wired up.
+  <Card title="box.json manifest" icon="box">
+    A `box.json` build manifest for Phar packaging, suitable for CI/CD pipelines.
   </Card>
   <Card title="Migration init container" icon="database">
     SQL migration setup using the Kubernetes init container pattern.

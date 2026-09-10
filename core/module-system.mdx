@@ -1,7 +1,7 @@
 ---
-title: "Winter Boot Modules: Build and Integrate Extensions"
-sidebarTitle: "Modules"
-description: "Package reusable infrastructure as pluggable Winter Boot modules. Covers WinterModule interface, first-party modules, and building custom modules."
+title: "The Module System: Extending Winter with Libraries"
+sidebarTitle: "Module System"
+description: "Understand the WinterModule contract and #[Module] attribute that every Winter library uses to register beans, scan namespaces, and boot infrastructure."
 ---
 
 Winter Boot's module system gives you a clean, attribute-driven mechanism for bundling infrastructure integrations — Redis, Kafka, Doctrine ORM, service discovery, and more — as self-contained, reusable units. Modules are discovered and loaded before the application starts, so each module can register its own beans, scan additional namespaces, and run any required initialisation without touching your application code. The `WinterModule` interface keeps the contract minimal: implement two lifecycle hooks and annotate your class with `#[Module]`.
@@ -94,33 +94,51 @@ All official modules live in the `suvera/winter-modules` monorepo. Install the e
 composer require suvera/winter-modules
 ```
 
+See the [Modules overview](/modules/overview) for a full catalog with guidance on which module to pick for which use case.
+
 <CardGroup cols={2}>
-  <Card title="winter-data-redis" icon="database">
-    Redis-backed caching (`SharedKvCache`) and async task queue support.
+  <Card title="Doctrine" icon="table" href="/modules/doctrine">
+    Doctrine ORM and DBAL for entity management, DBAL, and multi-tenant datasources.
   </Card>
-  <Card title="winter-kafka" icon="arrow-right-arrow-left">
+
+  <Card title="Redis" icon="database" href="/modules/data-redis">
+    PhpRedis client templates for singles, clusters, arrays, sentinels, and token rings.
+  </Card>
+
+  <Card title="Memcache" icon="memory" href="/modules/data-memcache">
+    Memcached and Memcache client templates for lightweight caching.
+  </Card>
+
+  <Card title="Memdb" icon="hard-drive" href="/modules/memdb">
+    Embedded in-memory servers (Redis, Ignite, Memcached, Hazelcast) managed by the app lifecycle.
+  </Card>
+
+  <Card title="Kafka" icon="signal" href="/modules/kafka">
     Apache Kafka producer and consumer integration for event streaming pipelines.
   </Card>
-  <Card title="winter-doctrine" icon="table">
-    Doctrine ORM and DBAL for full-featured database abstraction and entity management.
+
+  <Card title="SQS" icon="envelope" href="/modules/sqs">
+    Amazon SQS producer and consumer with IAM role and IRSA support.
   </Card>
-  <Card title="winter-s3" icon="cloud">
-    Amazon S3 object storage — upload, download, and manage buckets from any bean.
+
+  <Card title="S3" icon="cloud" href="/modules/s3">
+    Amazon S3 and S3-compatible object storage from any bean.
   </Card>
-  <Card title="winter-sqs" icon="envelope">
-    Amazon SQS message queue integration for reliable asynchronous workloads.
+
+  <Card title="OpenSearch" icon="magnifying-glass" href="/modules/opensearch">
+    OpenSearch indexing, querying, and AWS SigV4-signed access.
   </Card>
-  <Card title="winter-opensearch" icon="magnifying-glass">
-    OpenSearch indexing and querying for full-text search and analytics.
+
+  <Card title="DTCE" icon="rotate" href="/modules/dtce">
+    Distributed Task Computing Engine for cross-node background task orchestration.
   </Card>
-  <Card title="winter-memdb" icon="memory">
-    In-memory database connectors for Apache Ignite, Memcached, and Hazelcast.
+
+  <Card title="Eureka" icon="network-wired" href="/modules/eureka">
+    Service discovery via Consul and Netflix Eureka.
   </Card>
-  <Card title="winter-eureka" icon="network-wired">
-    Service discovery via Consul and Netflix Eureka for microservice environments.
-  </Card>
-  <Card title="winter-dtce" icon="rotate">
-    Distributed Transaction Coordination Engine for saga-style distributed workflows.
+
+  <Card title="Security" icon="shield" href="/modules/security">
+    Application security policies for Winter Boot applications.
   </Card>
 </CardGroup>
 
@@ -129,84 +147,82 @@ composer require suvera/winter-modules
 Package any infrastructure concern — a third-party SDK, a custom cache layer, an internal service client — as a reusable, injectable module by following these steps.
 
 <Steps>
+  ### Create the module class
 
-### Create the module class
+  ```php src/Module/AcmeMyModule.php
+  <?php
+  declare(strict_types=1);
 
-```php src/Module/AcmeMyModule.php
-<?php
-declare(strict_types=1);
+  namespace Acme\MyModule;
 
-namespace Acme\MyModule;
+  use dev\winterframework\core\app\WinterModule;
+  use dev\winterframework\core\context\ApplicationContext;
+  use dev\winterframework\core\context\ApplicationContextData;
+  use dev\winterframework\stereotype\Module;
 
-use dev\winterframework\core\app\WinterModule;
-use dev\winterframework\core\context\ApplicationContext;
-use dev\winterframework\core\context\ApplicationContextData;
-use dev\winterframework\stereotype\Module;
+  #[Module(title: 'Acme My Module')]
+  class AcmeMyModule implements WinterModule {
 
-#[Module(title: 'Acme My Module')]
-class AcmeMyModule implements WinterModule {
+      public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+          // Validate required config, register beans
+      }
 
-    public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
-        // Validate required config, register beans
-    }
+      public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+          // Start connections or background processes
+      }
+  }
+  ```
 
-    public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
-        // Start connections or background processes
-    }
-}
-```
+  ### Register beans inside `init()`
 
-### Register beans inside `init()`
+  Use `ApplicationContextData::getBeanProvider()` to register beans that consumers can inject with `#[Autowired]`:
 
-Use `ApplicationContextData::getBeanProvider()` to register beans that consumers can inject with `#[Autowired]`:
+  ```php
+  public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+      $client = new AcmeClient(/* config */);
 
-```php
-public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
-    $client = new AcmeClient(/* config */);
+      $ctxData->getBeanProvider()->registerInternalBean(
+          $client,
+          AcmeClient::class,
+          true          // mark as primary bean
+      );
+  }
+  ```
 
-    $ctxData->getBeanProvider()->registerInternalBean(
-        $client,
-        AcmeClient::class,
-        true          // mark as primary bean
-    );
-}
-```
+  ### Read module configuration
 
-### Read module configuration
+  The framework passes the raw `moduleDef` YAML entry to your `#[Module]` attribute. Use the `ModuleTrait` helper to retrieve it:
 
-The framework passes the raw `moduleDef` YAML entry to your `#[Module]` attribute. Use the `ModuleTrait` helper to retrieve it:
+  ```php
+  use dev\winterframework\util\ModuleTrait;
 
-```php
-use dev\winterframework\util\ModuleTrait;
+  #[Module(title: 'Acme My Module')]
+  class AcmeMyModule implements WinterModule {
+      use ModuleTrait;
 
-#[Module(title: 'Acme My Module')]
-class AcmeMyModule implements WinterModule {
-    use ModuleTrait;
+      public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+          $moduleDef = $ctx->getModule(static::class);
+          $config    = $this->retrieveConfiguration($ctx, $ctxData, $moduleDef);
 
-    public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
-        $moduleDef = $ctx->getModule(static::class);
-        $config    = $this->retrieveConfiguration($ctx, $ctxData, $moduleDef);
+          $host = $config['acme']['host'] ?? 'localhost';
+      }
+  }
+  ```
 
-        $host = $config['acme']['host'] ?? 'localhost';
-    }
-}
-```
+  ### Enable the module in `application.yml`
 
-### Enable the module in `application.yml`
+  ```yaml application.yml
+  modules:
+    - module: 'Acme\MyModule\AcmeMyModule'
+      enabled: true
+      configFile: 'config/acme.yml'
+  ```
 
-```yaml application.yml
-modules:
-  - module: 'Acme\MyModule\AcmeMyModule'
-    enabled: true
-    configFile: 'config/acme.yml'
-```
+  ### Install via Composer
 
-### Install via Composer
-
-```bash
-composer require acme/my-winter-module
-```
-
+  ```bash
+  composer require acme/my-winter-module
+  ```
 </Steps>
 
 <Tip>

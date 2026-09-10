@@ -6,6 +6,10 @@ description: "Use the #[Async] attribute to dispatch service methods to backgrou
 
 Winter Boot's asynchronous execution model lets you fire off any service or component method as a background task — the calling code returns immediately while a dedicated pool of Swoole worker processes handles the actual work. This non-blocking design keeps web request latency low even when individual operations are expensive, because heavy lifting happens outside the request/response cycle entirely. Under the hood, arguments are serialised into an in-memory (or Redis-backed) queue and consumed by background workers, so the concurrency model is process-based rather than thread-based.
 
+<Tip>
+  For distributed task processing across multiple nodes with persistent queues, see the [DTCE module](/modules/dtce). For event-driven consumers backed by Kafka or SQS, see [Kafka](/modules/kafka) and [SQS](/modules/sqs).
+</Tip>
+
 ## Prerequisites
 
 Async support is powered by the [Swoole](https://openswoole.com/) PHP extension. Install it via PECL and enable it in your `php.ini` before proceeding.

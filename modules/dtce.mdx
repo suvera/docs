@@ -1,0 +1,189 @@
+---
+title: "Winter DTCE: Distributed Task Computing Engine"
+sidebarTitle: "DTCE"
+description: "Winter DTCE distributes tasks across nodes with pluggable queues and stores. Configure Redis, Kafka, Pdbc, or local backends for resilient background processing."
+---
+
+Winter DTCE is a real-time Distributed Task Computing Engine for Winter Boot. It accepts tasks and jobs, queues them durably, and processes them through workers that you define. This page explains how DTCE works, which backends it supports, and how to configure and execute your first distributed task.
+
+A **task** is a small logical unit that makes progress toward a unified goal of the system. A **job** is a collection of similar tasks.
+
+DTCE provides the following capabilities:
+
+- Execute a task synchronously and asynchronously
+- Execute a big job (many tasks) synchronously and asynchronously
+- Persist tasks through a storage backend, so they are not lost on restarts or failures
+
+## Setup
+
+Require the modules package and enable DTCE in your application:
+
+```shell
+composer require suvera/winter-modules
+```
+
+Add the module to your **application.yml**:
+
+```yaml
+modules:
+  - module: dev\winterframework\dtce\DtceModule
+    enabled: true
+    configFile: dtce-config.yml
+```
+
+### PHP extension prerequisites
+
+- `swoole` extension is required.
+- `redis` extension is needed if Redis is used as a backend store.
+- `rdkafka` extension is needed if Kafka is used as a queue.
+
+## Architecture
+
+There are three main components.
+
+### 1. Task Queue
+
+Any executable task is placed in the queue, then processed by a worker. Any queue implementation must implement `TaskQueueHandler`. This module provides four implementations out of the box.
+
+| Queue class | Kind | Notes |
+| --- | --- | --- |
+| `dev\winterframework\dtce\task\storage\TaskQueueShared` | Local | Make sure `winter.queue.port` is set in `application.yml`. This is local to the system, shared across processes. |
+| `dev\winterframework\dtce\task\storage\TaskQueueRedis` | Distributed | Requires the [Redis module](/modules/data-redis). |
+| `dev\winterframework\dtce\task\storage\TaskQueueKafka` | Distributed | Requires the [Kafka module](/modules/kafka). |
+| `dev\winterframework\dtce\task\storage\TaskQueuePdbc` | Distributed | Uses a database-backed queue. |
+
+### 2. Task Store
+
+Input data to a worker and output data from a worker are stored in the Task Store. Any store implementation must implement `TaskIOStorageHandler`. This module provides four implementations out of the box.
+
+| Store class | Kind | Notes |
+| --- | --- | --- |
+| `dev\winterframework\dtce\task\storage\TaskIOStorageDisk` | Local disk | Local disks are not distributed; they only work on a single node. For multiple nodes, use NFS, HDFS, GlusterFS, or another shared file system. |
+| `dev\winterframework\dtce\task\storage\TaskIOStorageKvStore` | Local memory KV | Make sure `winter.kv.port` is set in `application.yml`. This is local to the system, shared across processes. |
+| `dev\winterframework\dtce\task\storage\TaskIOStorageRedis` | Distributed | Requires the [Redis module](/modules/data-redis). |
+| `dev\winterframework\dtce\task\storage\TaskIOStoragePdbc` | Distributed | Uses a database-backed store. |
+
+### 3. Task Worker
+
+This is the actual implementation of your work. A task worker must implement `TaskWorker`.
+
+## Example worker and execution
+
+The following `WordCounter` worker counts the number of words in a string:
+
+```php
+class WordCounter extends AbstractTaskWorker {
+
+    public function work(mixed $input): TaskOutput {
+        if (!is_scalar($input)) {
+            return new NumericOutput(0);
+        }
+
+        $input = '' . $input;
+
+        return new NumericOutput(str_word_count($input));
+    }
+}
+```
+
+Execute it through `TaskExecutionServiceFactory`:
+
+```php
+#[Autowired]
+private TaskExecutionServiceFactory $factory;
+
+// Name of the task "wordCount", provided in dtce-config.yml.
+$executor = $this->factory->executionService("wordCount");
+
+$result = $executor->executeTask("Some text here. Every application has some number of tasks that run in the background.");
+
+if ($result->isSuccess()) {
+    print "Task SUCCESS: " . $result->getResult() . " words.\n";
+} else {
+    print "Task FAILED!\n";
+}
+```
+
+## DTCE configuration (dtce-config.yml)
+
+A minimal `dtce-config.yml` assigns a queue handler, a storage handler, and a worker class to a named task:
+
+```yaml
+tasks:
+  - name: wordCount
+    storage:
+      handler: dev\winterframework\dtce\task\storage\TaskIOStorageDisk
+      path: /tmp
+    worker:
+      total: 4
+      class: com\company\winter\task\word\WordCounter
+    queue:
+      handler: dev\winterframework\dtce\task\storage\TaskQueueRedis
+
+  - name: another-task
+    ...
+```
+
+### Full configuration
+
+```yaml
+tasks:
+  - name: name-of-the-task
+
+    # TASK STORAGE configuration
+    storage:
+      handler: dev\winterframework\dtce\task\storage\TaskIOStorage***
+
+      # TaskIOStorageDisk handler specific
+      path: /folder/path
+
+      # TaskIOStoragePdbc handler specific
+      pdbc:
+        bean:      # optional, unless you have your own PdbcTemplate implementation
+        entity:    # optional, defaults to "TaskIoTable"; you need the table created beforehand
+        ttl:       # optional, in seconds; time to keep stored records, defaults to 4 hours
+
+      # TaskIOStorageRedis handler specific
+      redis:
+        bean:      # optional, unless you have a redis bean name; see the Redis module for details
+        ttl:       # optional, in seconds; time to keep stored records, defaults to 4 hours
+
+    # TASK WORKER configuration
+    worker:
+      total: 10   # Number of workers to spawn. This is the concurrency setting.
+      class: com\company\winter\task\word\WordCounter
+
+    # TASK QUEUE configuration
+    queue:
+      handler: dev\winterframework\dtce\task\storage\TaskQueue**
+
+      readTimeoutMs:   # milliseconds to wait while reading data from queue
+      writeTimeoutMs:  # milliseconds to wait while writing data to queue
+
+      # TaskQueuePdbc specific
+      pdbc:
+        bean:      # optional, unless you have your own PdbcTemplate implementation
+        entity:    # optional, defaults to "TaskQueueTable"; you need the table created beforehand
+
+      # TaskQueueRedis specific
+      redis:
+        bean:      # optional, unless you have a redis bean name; see the Redis module for details
+        key:       # optional, if you want to use a specific list key
+
+      # TaskQueueKafka specific
+      kafka:
+        bootstrap.servers: 127.0.0.1  # Kafka nodes
+        topic: topic1               # Kafka topic name
+        consumer:
+          - auto.commit.interval.ms: 100
+            auto.commit.enable: true
+            # as many rdkafka settings as needed; see https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+        producer:
+          - message.max.bytes: 10485760
+            retries: 5
+            # as many rdkafka settings as needed; see https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+```
+
+<Tip>
+  DTCE complements the built-in framework primitives. For single-process background work see [Async Tasks](/async/async-tasks) and [Scheduled Tasks](/async/scheduling); use DTCE when you need distributed, persistent task processing across nodes. Redis-backed queues use the [Redis module](/modules/data-redis); Kafka-backed queues use the [Kafka module](/modules/kafka).
+</Tip>

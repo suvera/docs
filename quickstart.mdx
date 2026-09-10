@@ -40,7 +40,7 @@ This guide walks you through building a minimal but complete Winter Boot microse
   <Step title="Create the Directory Structure">
     Winter Boot expects a `config/` directory for `application.yml` and a `src/` directory for your PHP classes. A minimal layout looks like this:
 
-    ```
+    ```text
     my-service/
     ├── composer.json
     ├── config/
@@ -168,7 +168,7 @@ This guide walks you through building a minimal but complete Winter Boot microse
 
     You should see output similar to:
 
-    ```
+    ```text
     Http server started on 127.0.0.1:8080, pid:12345, master_pid:12344
     ```
   </Step>
@@ -218,7 +218,7 @@ Now that your service is running, explore these topics to build on the foundatio
   <Card title="Async & Scheduling" icon="clock" href="/async/async-tasks">
     Run background jobs with `#[Async]` and `#[Scheduled]`.
   </Card>
-  <Card title="Modules & Extensions" icon="puzzle-piece" href="/advanced/modules">
+  <Card title="Module System" icon="puzzle-piece" href="/core/module-system">
     Add Redis, Kafka, Doctrine ORM, and other integrations via community modules.
   </Card>
 </CardGroup>

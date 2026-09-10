@@ -1,7 +1,5 @@
-@media (width >=1024px) {
-    #content-area [class*="max-w-"] {
-        max-width: 80% !important;
-        margin-left: auto;
-        margin-right: auto;
-    }
+#content-area {
+    max-width: 80% !important;
+    margin-left: auto;
+    margin-right: auto;
 }

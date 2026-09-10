@@ -95,12 +95,6 @@
             ]
           },
           {
-            "group": "Embedded In-Memory Servers",
-            "pages": [
-              "modules/memdb"
-            ]
-          },
-          {
             "group": "Messaging",
             "pages": [
               "modules/kafka",
@@ -124,7 +118,47 @@
           {
             "group": "Planned",
             "pages": [
+              "modules/memdb",
               "modules/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "examples/overview"
+            ]
+          },
+          {
+            "group": "Data",
+            "pages": [
+              "examples/redis-app",
+              "examples/doctrine-app"
+            ]
+          },
+          {
+            "group": "Messaging",
+            "pages": [
+              "examples/sqs-consumer",
+              "examples/kafka-app"
+            ]
+          },
+          {
+            "group": "Storage & Search",
+            "pages": [
+              "examples/s3-app",
+              "examples/opensearch-app"
+            ]
+          },
+          {
+            "group": "Async & Concurrency",
+            "pages": [
+              "examples/daemon-app",
+              "examples/scheduler-app"
             ]
           }
         ]

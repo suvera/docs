@@ -1,0 +1,429 @@
+---
+title: "Doctrine Sample Application"
+sidebarTitle: "Doctrine"
+description: "Build a user CRUD API with Winter Boot and the Doctrine ORM module, using programmatic transactions against PostgreSQL."
+---
+
+Build a REST API that manages users through Doctrine ORM entities. You use Winter Boot for the application runtime and the `winter-doctrine` package for the `EntityManager` and transaction manager. Writes run inside programmatic transactions via `EmTransactionManager`.
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `pdo_pgsql` extension. You also need a PostgreSQL server. The sample config points at `localhost:5432`, database `appdb`, user `appuser` — replace them with your own server.
+
+Start PostgreSQL before you run the app:
+
+```bash
+docker run -d -p 5432:5432 --name postgres \
+  -e POSTGRES_DB=appdb \
+  -e POSTGRES_USER=appuser \
+  -e POSTGRES_PASSWORD=apppass \
+  postgres:16
+```
+
+## Project structure
+
+The sample uses this layout:
+
+```
+doctrine/
+├── bin/
+│   └── application.php          # Application entry point
+├── config/
+│   └── application.yml          # Datasource and Doctrine module config
+├── create-table.sql             # Table setup script
+├── src/
+│   ├── DoctrineSampleApplication.php  # Main application class
+│   ├── controller/
+│   │   └── UserController.php   # User REST endpoints
+│   ├── model/
+│   │   └── User.php             # Doctrine entity
+│   └── service/
+│       └── UserService.php      # Transactional user operations
+└── composer.json                # Dependencies
+```
+
+## Install dependencies
+
+Require the framework and the Doctrine package:
+
+```bash
+composer require suvera/winter-boot suvera/winter-doctrine
+```
+
+## Source files
+
+Switch between the source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="DoctrineSampleApplication.php">
+    The single entry point. `#[EnableTransactionManagement]` activates the transaction infrastructure used by the service.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\WinterBootApplication;
+    use dev\winterframework\stereotype\txn\EnableTransactionManagement;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    #[EnableTransactionManagement]
+    class DoctrineSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="model/User.php">
+    The entity. Attributes map the class to the `doctrine_users` table with an auto-generated id. The `bombok\Data` trait generates the getters and setters from the property declarations, so no accessor boilerplate is needed — the `@method` annotations keep IDEs and static analysis aware of them.
+
+    ```php
+    <?php
+
+    namespace dev\example\model;
+
+    use dev\winterframework\bombok\Data;
+    use Doctrine\ORM\Mapping\Column;
+    use Doctrine\ORM\Mapping\Entity;
+    use Doctrine\ORM\Mapping\GeneratedValue;
+    use Doctrine\ORM\Mapping\Id;
+    use Doctrine\ORM\Mapping\Table;
+
+    /**
+     * @method int getId()
+     * @method setId(int $val): void
+     * @method string getName()
+     * @method setName(string $val): void
+     * @method string getEmail()
+     * @method setEmail(string $val): void
+     */
+    #[Entity]
+    #[Table(name: "doctrine_users")]
+    class User implements \JsonSerializable {
+        use Data;
+
+        #[Id]
+        #[GeneratedValue]
+        #[Column(name: "id", type: "integer", nullable: false)]
+        private int $id = 0;
+
+        #[Column(name: "name", type: "string", nullable: false)]
+        private string $name = '';
+
+        #[Column(name: "email", type: "string", nullable: false)]
+        private string $email = '';
+
+        public function jsonSerialize(): array {
+            return [
+                'id' => $this->id,
+                'name' => $this->name,
+                'email' => $this->email,
+            ];
+        }
+    }
+    ```
+
+    Setters validate argument types against the property declarations. See [Utilities](/building/utilities) for the full `Data` trait reference.
+  </Tab>
+
+  <Tab title="service/UserService.php">
+    The service. Each write opens a transaction on `EmTransactionManager`, commits on success, and rolls back on any failure. Reads use the `EntityManager` directly.
+
+    ```php
+    <?php
+
+    namespace dev\example\service;
+
+    use dev\example\model\User;
+    use dev\winterframework\doctrine\orm\EmTransactionManager;
+    use dev\winterframework\stereotype\Autowired;
+    use dev\winterframework\stereotype\Service;
+    use dev\winterframework\txn\support\DefaultTransactionDefinition;
+    use Doctrine\ORM\EntityManager;
+
+    #[Service]
+    class UserService {
+
+        #[Autowired]
+        private EmTransactionManager $txnManager;
+
+        private function getEm(): EntityManager {
+            return $this->txnManager->getEntityManager();
+        }
+
+        public function createUser(User $user): User {
+            $status = $this->txnManager->getTransaction(new DefaultTransactionDefinition());
+            try {
+                $this->getEm()->persist($user);
+                $this->getEm()->flush();
+                $this->txnManager->commit($status);
+                return $user;
+            } catch (\Throwable $e) {
+                $this->txnManager->rollback($status);
+                throw $e;
+            }
+        }
+
+        public function deleteUser(int $id): bool {
+            $status = $this->txnManager->getTransaction(new DefaultTransactionDefinition());
+            try {
+                $user = $this->findById($id);
+                if ($user) {
+                    $this->getEm()->remove($user);
+                    $this->getEm()->flush();
+                    $this->txnManager->commit($status);
+                    return true;
+                }
+                $this->txnManager->commit($status);
+                return false;
+            } catch (\Throwable $e) {
+                $this->txnManager->rollback($status);
+                throw $e;
+            }
+        }
+
+        public function findById(int $id): ?User {
+            return $this->getEm()->find(User::class, $id);
+        }
+
+        public function findAll(): array {
+            return $this->getEm()->getRepository(User::class)->findAll();
+        }
+
+        public function findByEmail(string $email): ?User {
+            return $this->getEm()->getRepository(User::class)->findOneBy(['email' => $email]);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="controller/UserController.php">
+    The controller. It rejects duplicate emails on create and returns 404-style payloads for missing users.
+
+    ```php
+    <?php
+
+    namespace dev\example\controller;
+
+    use dev\example\model\User;
+    use dev\example\service\UserService;
+    use dev\winterframework\stereotype\Autowired;
+    use dev\winterframework\stereotype\RestController;
+    use dev\winterframework\stereotype\web\DeleteMapping;
+    use dev\winterframework\stereotype\web\GetMapping;
+    use dev\winterframework\stereotype\web\PostMapping;
+    use dev\winterframework\stereotype\web\PathVariable;
+    use dev\winterframework\stereotype\web\RequestBody;
+
+    #[RestController]
+    class UserController {
+
+        #[Autowired]
+        protected UserService $userService;
+
+        #[GetMapping(path: "/users")]
+        public function getAllUsers(): array {
+            return [
+                'success' => true,
+                'data' => $this->userService->findAll()
+            ];
+        }
+
+        #[GetMapping(path: "/users/{id}")]
+        public function getUserById(#[PathVariable] int $id): array {
+            $user = $this->userService->findById($id);
+
+            if ($user) {
+                return [
+                    'success' => true,
+                    'data' => $user
+                ];
+            }
+            return [
+                'success' => false,
+                'message' => 'User not found'
+            ];
+        }
+
+        #[PostMapping(path: "/users")]
+        public function createUser(#[RequestBody] User $user): array {
+            $existing = $this->userService->findByEmail($user->getEmail());
+            if ($existing) {
+                return [
+                    'success' => false,
+                    'message' => 'User with email ' . $user->getEmail() . ' already exists'
+                ];
+            }
+
+            $created = $this->userService->createUser($user);
+            return [
+                'success' => true,
+                'data' => $created,
+                'message' => 'User created successfully'
+            ];
+        }
+
+        #[DeleteMapping(path: "/users/{id}")]
+        public function deleteUser(#[PathVariable] int $id): array {
+            if ($this->userService->deleteUser($id)) {
+                return [
+                    'success' => true,
+                    'message' => 'User deleted successfully'
+                ];
+            }
+            return [
+                'success' => false,
+                'message' => 'User not found'
+            ];
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\DoctrineSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    DoctrineSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares framework dependencies with PSR-4 autoloading for its own namespace.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-doctrine-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "ext-pdo_pgsql": "*",
+            "suvera/winter-boot": "@dev",
+            "suvera/winter-doctrine": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds local `path` repositories for `winter-boot` and `winter-doctrine` so they resolve from sibling checkouts. You do not need those entries when you install released packages from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+Switch between the two config files. `application.yml` registers the module and the datasource, and `create-table.sql` creates the table.
+
+<Tabs>
+  <Tab title="application.yml">
+    The full sample file registers `DoctrineModule`, marks `defaultdb` as primary, and points the ORM at the model directory. It keeps only the server, app identity, module, and datasource keys:
+
+    ```yaml
+    server:
+        port: 8080
+        address: 0.0.0.0
+        context-path: /
+    winter:
+        application:
+            name: Doctrine Sample Application
+            id: doctrine-sample-app
+            version: 1.0.0
+    modules:
+        - module: dev\winterframework\doctrine\DoctrineModule
+          enabled: true
+    datasource:
+        -   name: defaultdb
+            isPrimary: true
+            url: "pgsql:host=localhost;port=5432;dbname=appdb"
+            username: appuser
+            password: apppass
+            validationQuery: SELECT 'Database Connected'
+            driverClass: dev\winterframework\pdbc\pdo\PdoDataSource
+            connection:
+                persistent: false
+                errorMode: ERRMODE_EXCEPTION
+                autoCommit: false
+                defaultrowprefetch: 100
+                idleTimeout: 180
+                charset: utf8
+                schema: public
+            doctrine:
+                entityPaths:
+                    - /path/to/src/model
+    ```
+
+    Replace the connection details with your own server, and `entityPaths` with the absolute path of your `src/model` directory. See [Configuration](/configuration) for every `application.yml` key.
+  </Tab>
+
+  <Tab title="create-table.sql">
+    Creates the table before the first run:
+
+    ```sql
+    CREATE TABLE IF NOT EXISTS doctrine_users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## Run the app
+
+Create the table, start the app, then create and read a user.
+
+**1. Create the table:**
+
+```bash
+psql -h localhost -p 5432 -U appuser -d appdb -f create-table.sql
+```
+
+**2. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+**3. Create a user:**
+
+```bash
+curl -X POST "http://localhost:8080/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ada Lovelace","email":"ada@example.com"}'
+```
+
+**4. List users:**
+
+```bash
+curl "http://localhost:8080/users"
+```
+
+**5. Delete the user:**
+
+```bash
+curl -X DELETE "http://localhost:8080/users/1"
+```
+
+## Next steps
+
+- Read the [Doctrine module](/modules/doctrine) for DBAL access, multi-tenant datasources, and `#[Transactional]` managers.
+- Browse all [Libraries](/modules/overview) when you need Redis, Kafka, S3, or OpenSearch in the same app.

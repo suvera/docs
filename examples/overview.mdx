@@ -1,0 +1,60 @@
+---
+title: "Examples built with Winter Boot and Winter Modules"
+sidebarTitle: "Overview"
+description: "Browse end-to-end example apps built with Winter Boot and Winter Modules."
+---
+
+These examples are complete, runnable apps built with Winter Boot plus Winter Modules. Each one shows configuration, application code, and how to run and verify the result locally.
+
+## Available examples
+
+<CardGroup cols={2}>
+  <Card title="Redis" icon="server" href="/examples/redis-app">
+    Store strings, counters, hashes, lists, and sets with Winter Redis and PhpRedisTemplate.
+  </Card>
+
+  <Card title="SQS consumer" icon="cloud" href="/examples/sqs-consumer">
+    Consume messages from an SQS queue with Winter SQS and write them to a file, using ElasticMQ locally.
+  </Card>
+
+  <Card title="Kafka consumer" icon="signal" href="/examples/kafka-app">
+    Consume messages from a Kafka topic with Winter Kafka and write them to a file, using a local broker.
+  </Card>
+
+  <Card title="S3" icon="box" href="/examples/s3-app">
+    Upload, download, list, and delete objects with Winter S3, tested locally with MinIO.
+  </Card>
+
+  <Card title="OpenSearch" icon="magnifying-glass" href="/examples/opensearch-app">
+    Index, search, update, and delete documents with Winter OpenSearch.
+  </Card>
+
+  <Card title="Doctrine" icon="database" href="/examples/doctrine-app">
+    Manage users through Doctrine ORM entities with programmatic transactions.
+  </Card>
+
+  <Card title="Daemon threads" icon="gear" href="/examples/daemon-app">
+    Watch an inbox directory with a supervised background daemon process.
+  </Card>
+
+  <Card title="Scheduler" icon="clock" href="/examples/scheduler-app">
+    Run hourly cleanup and daily summary jobs on fixed cadences.
+  </Card>
+</CardGroup>
+
+## How examples are structured
+
+Each example follows the same layout so you can move from one to the next quickly:
+
+- What you build and which modules it uses
+- Prerequisites such as PHP extensions and backing services
+- Project structure with every file you need
+- Configuration (`application.yml` plus the module config file)
+- Application and worker code
+- Steps to run the app and verify the outcome
+
+Start with the [SQS consumer](/examples/sqs-consumer).
+
+<Tip>
+  For module API details behind the examples, see [Libraries overview](/modules/overview) and the [Redis](/modules/data-redis), [Doctrine](/modules/doctrine), [SQS](/modules/sqs), [Kafka](/modules/kafka), [S3](/modules/s3), and [OpenSearch](/modules/opensearch) modules. Daemon threads and scheduling are core framework features — see [Daemon Threads](/async/daemon-threads) and [Scheduling](/async/scheduling).
+</Tip>

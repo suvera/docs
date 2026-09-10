@@ -15,8 +15,8 @@ Winter is deliberately modular. You install the framework, then add only the lib
 | `suvera/winter-boot` | The framework core: DI, AOP, REST, PDBC, transactions, migrations, async, scheduling, actuator, telemetry | Always |
 | `suvera/winter-doctrine` | Doctrine ORM and DBAL plus multi-tenant datasources | You need ORM entities or Doctrine DBAL |
 | `suvera/winter-modules` | 8 official integration modules (Kafka, SQS, S3, OpenSearch, Redis, Memcache, DTCE, Security) | You integrate with those systems |
-| `suvera/winter-memdb` | Embedded in-memory servers (Redis, Ignite, Memcached, Hazelcast) launched by the app | You want the app to manage the cache/database server |
 | `suvera/winter-eureka` | Service discovery via Consul or Netflix Eureka | You run multiple service instances behind discovery |
+| `suvera/winter-memdb` | Embedded in-memory servers (Redis, Ignite, Memcached, Hazelcast) launched by the app *EXPERIMENTAL* | You want the app to manage the cache/database server |
 
 <Card title="See the Libraries tab" icon="puzzle-piece" href="/modules/overview">
   Full catalog of official libraries, with per-need guidance and links to each integration's dedicated page.

@@ -1,0 +1,240 @@
+---
+title: "Scheduler Sample Application"
+sidebarTitle: "Scheduler"
+description: "Run recurring maintenance jobs with Winter Boot scheduling: an hourly temp-file cleanup and a daily summary tick."
+---
+
+Build an app that runs recurring maintenance jobs on fixed cadences. You put `#[Scheduled]` on zero-argument methods of a `#[Service]` bean and enable scheduling on the application class. The framework runs each tick in a dedicated worker process, so a slow job never blocks web requests.
+
+Use scheduled tasks for work that runs on a fixed cadence — cleanup, reports, cache warming. Use a [daemon thread](/examples/daemon-app) instead when the work must run continuously.
+
+<Warning>
+  Scheduling fires once per process. Run exactly one instance of this app — a second instance would run every tick twice.
+</Warning>
+
+<Note>
+  If you must scale this app to multiple instances, guard each tick with a distributed lock so only one instance runs it. See [Locking](/ops/locking) for the `#[Lockable]` annotation and supported lock managers.
+</Note>
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `swoole` and `pcntl` extensions. No external services are needed.
+
+## Project structure
+
+The sample uses this layout:
+
+```
+scheduler/
+├── bin/
+│   └── application.php              # Application entry point
+├── config/
+│   └── application.yml              # Scheduling pool config
+├── src/
+│   ├── SchedulerSampleApplication.php  # Main application class
+│   └── schedule/
+│       └── MaintenanceScheduler.php    # Scheduled job methods
+└── composer.json                    # Dependencies
+```
+
+## Install dependencies
+
+Require the framework package:
+
+```bash
+composer require suvera/winter-boot
+```
+
+## Source files
+
+Switch between the source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="SchedulerSampleApplication.php">
+    The single entry point. `#[EnableScheduling]` activates the `#[Scheduled]` ticks in the scanned namespace.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\task\EnableScheduling;
+    use dev\winterframework\stereotype\WinterBootApplication;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    #[EnableScheduling]
+    class SchedulerSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="schedule/MaintenanceScheduler.php">
+    The jobs. `hourlyCleanup()` deletes temp files older than one hour, and `dailySummary()` appends a one-line summary to the log. Each method is public, takes no arguments, returns void, and declares exactly one interval.
+
+    ```php
+    <?php
+
+    namespace dev\example\schedule;
+
+    use dev\winterframework\stereotype\Service;
+    use dev\winterframework\task\scheduling\stereotype\Scheduled;
+    use dev\winterframework\util\log\Wlf4p;
+
+    #[Service]
+    class MaintenanceScheduler {
+        use Wlf4p;
+
+        private const TMP_DIR = '/tmp/scheduler-tmp';
+        private const LOG_FILE = '/tmp/scheduler.log';
+
+        /**
+         * Hourly temp-file cleanup tick.
+         */
+        #[Scheduled(fixedDelay: 3600, initialDelay: 60)]
+        public function hourlyCleanup(): void {
+            @mkdir(self::TMP_DIR, 0777, true);
+
+            $deleted = 0;
+            $cutoff = time() - 3600;
+            foreach (glob(self::TMP_DIR . '/*') ?: [] as $file) {
+                if (is_file($file) && filemtime($file) < $cutoff) {
+                    unlink($file);
+                    $deleted++;
+                }
+            }
+
+            self::logInfo("Hourly cleanup deleted {$deleted} temp files");
+        }
+
+        /**
+         * Daily summary tick.
+         */
+        #[Scheduled(fixedDelay: 86400, initialDelay: 120)]
+        public function dailySummary(): void {
+            $line = sprintf(
+                "[%s] Daily summary: tmp dir holds %d files",
+                date('Y-m-d H:i:s'),
+                count(glob(self::TMP_DIR . '/*') ?: [])
+            ) . PHP_EOL;
+
+            file_put_contents(self::LOG_FILE, $line, FILE_APPEND | LOCK_EX);
+
+            self::logInfo(trim($line));
+        }
+    }
+    ```
+
+    `fixedDelay` waits that many seconds after the previous run completes before starting the next, so runs never overlap. `initialDelay` postpones the first run after boot. All values are in seconds and must be positive.
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\SchedulerSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    SchedulerSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares the framework dependency with PSR-4 autoloading for its own namespace.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-scheduler-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "suvera/winter-boot": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds a local `path` repository for `winter-boot` so it resolves from a sibling checkout. You do not need that entry when you install the released package from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+No module is needed — scheduling is a core framework feature. The full sample `application.yml` sets the server, app identity, and the scheduling worker pool:
+
+```yaml
+server:
+    port: 8080
+    address: 0.0.0.0
+    context-path: /
+winter:
+    application:
+        name: Scheduler Sample Application
+        id: scheduler-sample-app
+        version: 1.0.0
+    task:
+        scheduling:
+            poolSize: 1
+            queueCapacity: 50
+```
+
+See [Configuration](/configuration) for every `application.yml` key.
+
+## Run the app
+
+Start the app and trigger the jobs with short delays to verify them quickly.
+
+**1. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+**2. Seed a stale temp file and watch the hourly tick:**
+
+```bash
+mkdir -p /tmp/scheduler-tmp
+touch -d "2 hours ago" /tmp/scheduler-tmp/stale.tmp
+```
+
+About a minute after boot (`initialDelay: 60`), the app log shows the cleanup result:
+
+```text
+Hourly cleanup deleted 1 temp files
+```
+
+**3. Check the daily summary log:**
+
+```bash
+cat /tmp/scheduler.log
+```
+
+About two minutes after boot (`initialDelay: 120`), the summary line appears:
+
+```text
+[2026-09-10 12:02:00] Daily summary: tmp dir holds 0 files
+```
+
+The short initial delays let you verify both ticks without waiting an hour or a day — the steady-state cadence stays hourly and daily via `fixedDelay`.
+
+## Next steps
+
+- Read [Scheduling](/async/scheduling) for `fixedRate`, placeholder-driven intervals, and pool tuning.
+- Read the [Daemon example](/examples/daemon-app) when your work must run continuously instead of on a cadence.

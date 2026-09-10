@@ -1,0 +1,272 @@
+---
+title: "SQS Sample Application"
+sidebarTitle: "SQS consumer"
+description: "Build an end-to-end SQS consumer app with Winter Boot and the Winter SQS module that writes every message to a file, tested locally with ElasticMQ."
+---
+
+Build a consumer app that polls an SQS queue and writes every message to a file. You use Winter Boot for the application runtime and the Winter SQS module from Winter Modules for queue access. You test the whole flow locally with [ElasticMQ](https://github.com/softwaremill/elasticmq), an SQS-compatible emulator.
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `swoole` and `pcntl` extensions. You also need Docker to run ElasticMQ and the AWS CLI to create the queue and send messages.
+
+Start ElasticMQ before you run the app:
+
+```bash
+docker run -d -p 30932:9324 softwaremill/elasticmq-native
+```
+
+## Project structure
+
+The sample uses this layout:
+
+```
+sqs/
+├── bin/
+│   └── application.php          # Application entry point
+├── config/
+│   ├── application.yml          # Winter Boot application config
+│   └── sqs-config.yml           # SQS connections and consumers config
+├── src/
+│   ├── SqsSampleApplication.php # Main application class
+│   └── consumer/
+│       └── MessageFileWriterConsumer.php  # SQS consumer worker
+└── composer.json                # Dependencies
+```
+
+## Install dependencies
+
+Require the framework and the modules package:
+
+```bash
+composer require suvera/winter-boot suvera/winter-modules
+```
+
+## Source files
+
+Switch between the four source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="SqsSampleApplication.php">
+    The single entry point. It points Winter Boot at the `config` directory and at the sample namespace.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\WinterBootApplication;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    class SqsSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="MessageFileWriterConsumer.php">
+    The worker. It extends `AbstractConsumer` and appends one line per message with timestamp, message ID, queue name, and body.
+
+    ```php
+    <?php
+
+    namespace dev\example\consumer;
+
+    use dev\winterframework\sqs\consumer\AbstractConsumer;
+    use dev\winterframework\sqs\consumer\ConsumerRecord;
+    use dev\winterframework\sqs\consumer\ConsumerRecords;
+
+    class MessageFileWriterConsumer extends AbstractConsumer {
+
+        private const OUTPUT_FILE = '/tmp/sqs-messages.txt';
+
+        public function consume(ConsumerRecords $records): void {
+            foreach ($records as $record) {
+                /** @var ConsumerRecord $record */
+                $body = $record->getBody();
+                $messageId = $record->getMessageId();
+                $queueName = $record->getQueueName();
+
+                $line = sprintf(
+                    "[%s] MessageId: %s | Queue: %s | Body: %s",
+                    date('Y-m-d H:i:s'),
+                    $messageId,
+                    $queueName,
+                    $body
+                ) . PHP_EOL;
+
+                file_put_contents(
+                    self::OUTPUT_FILE,
+                    $line,
+                    FILE_APPEND | LOCK_EX
+                );
+
+                self::logInfo('Wrote message to file: ' . trim($line));
+            }
+        }
+    }
+    ```
+
+    `AbstractConsumer` gives you the `logInfo()` helper used on the last line. The worker process deletes each message from the queue after `consume()` returns successfully.
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\SqsSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    SqsSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares framework dependencies with PSR-4 autoloading for its own namespace.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-sqs-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "suvera/winter-boot": "@dev",
+            "suvera/winter-modules": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds local `path` repositories for `winter-boot` and `winter-modules` so it resolves them from a sibling checkout. You do not need those entries when you install released packages from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+Switch between the two config files. `application.yml` enables the module, and `sqs-config.yml` defines the connection and consumer.
+
+<Tabs>
+  <Tab title="application.yml">
+    The full sample file registers `SqsModule` and sets the server and app identity:
+
+    ```yaml
+    server:
+        port: 8080
+        address: 0.0.0.0
+        context-path: /
+    winter:
+        application:
+            name: SQS Sample Application
+            id: sqs-sample-app
+            version: 1.0.0
+    modules:
+        -   module: dev\winterframework\sqs\SqsModule
+            enabled: true
+            configFile: sqs-config.yml
+    ```
+
+    See [Configuration](/configuration) for every `application.yml` key.
+  </Tab>
+
+  <Tab title="sqs-config.yml">
+    Defines a `primary` connection to ElasticMQ and a `my-queue-consumer` consumer that polls `my-queue` with one worker:
+
+    ```yaml
+    sqs:
+        connections:
+            -   name: __default__
+                version: latest
+                region: elasticmq
+                retries: 3
+                delaySeconds: 0
+
+            -   name: primary
+                region: elasticmq
+                credentials:
+                    key: dummy
+                    secret: dummy
+                endpoint: http://localhost:30932
+
+        consumers:
+            -   name: __default__
+                version: latest
+                region: elasticmq
+                waitTimeSeconds: 5
+                maxNumberOfMessages: 5
+                visibilityTimeout: 30
+                pollIntervalMs: 500
+
+            -   name: my-queue-consumer
+                connection: primary
+                queueName: my-queue
+                workerNum: 1
+                workerClass: dev\example\consumer\MessageFileWriterConsumer
+                transientExceptions: []
+    ```
+
+    The `__default__` entries supply shared defaults. The named consumer overrides the queue, connection, worker count, and worker class. See the [SQS module](/modules/sqs) for every connection and consumer property.
+  </Tab>
+</Tabs>
+
+## Run the app
+
+Create the queue, start the app, send a message, then check the output file.
+
+**1. Create the queue:**
+
+```bash
+aws sqs create-queue --queue-name my-queue \
+    --endpoint-url http://localhost:30932 \
+    --region elasticmq
+```
+
+**2. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+The SQS worker starts polling `my-queue` as soon as the app boots.
+
+**3. Send a message:**
+
+```bash
+aws sqs send-message --queue-url http://localhost:30932/queue/my-queue \
+    --message-body "Hello ElasticMQ" \
+    --endpoint-url http://localhost:30932 \
+    --region elasticmq
+```
+
+**4. Verify consumption:**
+
+```bash
+cat /tmp/sqs-messages.txt
+```
+
+You see one line per consumed message, for example:
+
+```text
+[2026-09-10 12:00:01] MessageId: abc-123 | Queue: my-queue | Body: Hello ElasticMQ
+```
+
+## Next steps
+
+- Read the [SQS module](/modules/sqs) for producer APIs (`SqsService`), IAM-role setup, and consumer tuning (`waitTimeSeconds`, `maxNumberOfMessages`, `visibilityTimeout`).
+- Browse all [Libraries](/modules/overview) when you need Kafka, S3, Redis, or Doctrine in the same app.

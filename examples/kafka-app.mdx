@@ -1,0 +1,256 @@
+---
+title: "Kafka Sample Application"
+sidebarTitle: "Kafka consumer"
+description: "Build an end-to-end Kafka consumer app with Winter Boot and the Winter Kafka module that writes every message to a file, tested locally with a single-broker Kafka."
+---
+
+Build a consumer app that reads from a Kafka topic and writes every message to a file. You use Winter Boot for the application runtime and the Winter Kafka module from Winter Modules for topic access. You test the whole flow locally with a single-broker Kafka running in Docker.
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `swoole`, `rdkafka`, and `pcntl` extensions. You also need Docker to run Kafka.
+
+```bash
+pecl install swoole
+pecl install rdkafka
+```
+
+Start a single-broker Kafka before you run the app:
+
+```bash
+docker run -d -p 9092:9092 --name kafka \
+  apache/kafka:latest
+```
+
+## Project structure
+
+The sample uses this layout:
+
+```
+kafka/
+├── bin/
+│   └── application.php          # Application entry point
+├── config/
+│   ├── application.yml          # Winter Boot application config
+│   └── kafka-config.yml         # Kafka bootstrap and consumer config
+├── src/
+│   ├── KafkaSampleApplication.php  # Main application class
+│   └── consumer/
+│       └── MessageFileWriterConsumer.php  # Kafka consumer worker
+└── composer.json                # Dependencies
+```
+
+## Install dependencies
+
+Require the framework and the modules package:
+
+```bash
+composer require suvera/winter-boot suvera/winter-modules
+```
+
+## Source files
+
+Switch between the four source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="KafkaSampleApplication.php">
+    The single entry point. It points Winter Boot at the `config` directory and at the sample namespace.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\WinterBootApplication;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    class KafkaSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="MessageFileWriterConsumer.php">
+    The worker. It extends `AbstractConsumer` and appends one line per message with timestamp, topic, group, partition, offset, and value.
+
+    ```php
+    <?php
+
+    namespace dev\example\consumer;
+
+    use dev\winterframework\kafka\consumer\AbstractConsumer;
+    use dev\winterframework\kafka\consumer\ConsumerRecord;
+    use dev\winterframework\kafka\consumer\ConsumerRecords;
+
+    class MessageFileWriterConsumer extends AbstractConsumer {
+
+        private const OUTPUT_FILE = '/tmp/kafka-messages.txt';
+
+        public function consume(ConsumerRecords $records): void {
+            foreach ($records as $record) {
+                /** @var ConsumerRecord $record */
+                $line = sprintf(
+                    "[%s] Topic: %s | Group: %s | Partition: %s | Offset: %s | Value: %s",
+                    date('Y-m-d H:i:s'),
+                    $record->getTopic(),
+                    $record->getGroupName(),
+                    $record->getPartition(),
+                    $record->getOffset(),
+                    $record->getValue()
+                ) . PHP_EOL;
+
+                file_put_contents(
+                    self::OUTPUT_FILE,
+                    $line,
+                    FILE_APPEND | LOCK_EX
+                );
+
+                self::logInfo('Wrote message to file: ' . trim($line));
+            }
+        }
+    }
+    ```
+
+    `AbstractConsumer` gives you the `logInfo()` helper used on the last line. The worker commits each message offset after `consume()` returns successfully.
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\KafkaSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    KafkaSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares framework dependencies with PSR-4 autoloading for its own namespace. The `rdkafka` extension comes from PECL, not Composer.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-kafka-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "ext-rdkafka": "*",
+            "suvera/winter-boot": "@dev",
+            "suvera/winter-modules": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds local `path` repositories for `winter-boot` and `winter-modules` so it resolves them from a sibling checkout. You do not need those entries when you install released packages from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+Switch between the two config files. `application.yml` enables the module, and `kafka-config.yml` defines the bootstrap server and consumer group.
+
+<Tabs>
+  <Tab title="application.yml">
+    The full sample file registers `KafkaModule` and sets the server and app identity:
+
+    ```yaml
+    server:
+        port: 8080
+        address: 0.0.0.0
+        context-path: /
+    winter:
+        application:
+            name: Kafka Sample Application
+            id: kafka-sample-app
+            version: 1.0.0
+    modules:
+        -   module: dev\winterframework\kafka\KafkaModule
+            enabled: true
+            configFile: kafka-config.yml
+    ```
+
+    See [Configuration](/configuration) for every `application.yml` key.
+  </Tab>
+
+  <Tab title="kafka-config.yml">
+    Defines the local bootstrap server and a `my-group` consumer that reads the `my-topic` topic with one worker:
+
+    ```yaml
+    bootstrap.servers: localhost:9092
+
+    consumers:
+        -   name: __default__
+            transientExceptions: []
+
+        -   name: my-group
+            topics: [my-topic]
+            workerNum: 1
+            workerClass: dev\example\consumer\MessageFileWriterConsumer
+    ```
+
+    The `__default__` entry supplies shared defaults. Replace `bootstrap.servers` with your own brokers outside local testing. See the [Kafka module](/modules/kafka) for every consumer property and producer setup.
+  </Tab>
+</Tabs>
+
+## Run the app
+
+Create the topic, start the app, send a message, then check the output file.
+
+**1. Create the topic:**
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --create \
+    --topic my-topic \
+    --bootstrap-server localhost:9092
+```
+
+**2. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+The Kafka worker starts polling `my-topic` as soon as the app boots.
+
+**3. Send a message:**
+
+```bash
+echo "Hello Kafka" | docker exec -i kafka /opt/kafka/bin/kafka-console-producer.sh \
+    --topic my-topic \
+    --bootstrap-server localhost:9092
+```
+
+**4. Verify consumption:**
+
+```bash
+cat /tmp/kafka-messages.txt
+```
+
+You see one line per consumed message, for example:
+
+```text
+[2026-09-10 12:00:01] Topic: my-topic | Group: my-group | Partition: 0 | Offset: 0 | Value: Hello Kafka
+```
+
+## Next steps
+
+- Read the [Kafka module](/modules/kafka) for producer APIs (`KafkaService`), consumer tuning, and rdkafka settings.
+- Browse all [Libraries](/modules/overview) when you need SQS, S3, Redis, or Doctrine in the same app.

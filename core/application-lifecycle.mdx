@@ -1,7 +1,7 @@
 ---
-title: "Application Lifecycle and Context Management"
+title: "Application Lifecycle and Startup Hooks in Winter Boot"
 sidebarTitle: "App Lifecycle"
-description: "Understand how Winter Boot scans namespaces, builds the bean graph, fires lifecycle hooks, and shuts down — and how to choose the right runner for your deployment."
+description: "Learn how Winter Boot scans namespaces, builds the bean graph, fires lifecycle hooks, and shuts down — and how to choose the right runner."
 ---
 
 Every Winter Boot application begins with a single annotated class and a call to a runner. From that moment the framework scans your code, builds a complete bean graph, calls lifecycle hooks, and hands control to the runtime — whether that is a Swoole HTTP server, plain PHP-FPM, a CLI tool, or a migration runner. Knowing exactly what happens at each stage helps you write correct startup code and understand why the order of `#[PostConstruct]` and `#[OnApplicationReady]` matters.
@@ -289,9 +289,9 @@ class AppStartupTasks implements ApplicationReadyEvent {
 
 ---
 
-## Shutdown hooks — ShutDownRegistry
+## Shutdown hooks
 
-`ShutDownRegistry` is an internal framework class that wraps PHP's `register_shutdown_function`. When `#[Bean]` methods declare a `destroyMethod`, the container automatically registers that method with `ShutDownRegistry`. On process exit, all registered destroy methods are called in registration order.
+Winter Boot automatically registers bean destroy methods to run on process exit. When a `#[Bean]` factory method declares a `destroyMethod`, the framework registers it with PHP's shutdown mechanism. On process exit, all registered destroy methods are called in registration order.
 
 <CodeGroup>
 
@@ -331,3 +331,44 @@ class ConnectionPool {
   framework discovers them via reflection at startup and validates both
   constraints before the application begins serving.
 </Note>
+
+---
+
+## `WinterModule`
+
+`WinterModule` is the base contract for optional framework modules that extend Winter Boot with additional capabilities. Modules are declared in your `application.yml` and are initialised after the main application context has been built.
+
+Each module can register its own beans, scan additional namespaces, and integrate with the application context. Winter Boot's built-in features — such as transaction management, caching, async tasks, and scheduling — are all delivered as modules.
+
+```yaml application.yml — enabling modules
+modules:
+  - dev\winterframework\pdox\PdoModule
+  - dev\winterframework\cache\CacheModule
+  - dev\winterframework\task\TaskModule
+```
+
+To create a custom module, implement the `WinterModule` interface and list your module class under `modules` in `application.yml`. The framework instantiates each module during the [Load modules](#startup-sequence) phase of startup and calls its initialisation methods in declaration order.
+
+```php CustomAuditModule.php
+use dev\winterframework\core\app\WinterModule;
+use dev\winterframework\core\context\ApplicationContext;
+
+class CustomAuditModule implements WinterModule {
+
+    public function init(ApplicationContext $context): void {
+        // Register additional beans or configure services here.
+        // Called after the main context is built, before OnApplicationReady fires.
+    }
+}
+```
+
+```yaml application.yml — loading a custom module
+modules:
+  - App\Module\CustomAuditModule
+```
+
+<Tip>
+  Modules are the correct extension point when you need to share infrastructure
+  beans (loggers, metrics clients, audit trails) across multiple Winter Boot
+  applications in the same organisation.
+</Tip>

@@ -1,5 +1,5 @@
 ---
-title: "Manage Database Transactions Declaratively"
+title: "Managing Database Transactions in Winter Boot Services"
 sidebarTitle: "Transactions"
 description: "Use #[Transactional] annotations or PlatformTransactionManager to control commit, rollback, propagation, and isolation in Winter Boot services."
 ---
@@ -11,15 +11,20 @@ Winter Boot supports two complementary approaches to transaction management. **D
 Before using either approach, add `#[EnableTransactionManagement]` to your application entry-point class. Without this annotation, the transaction infrastructure is not bootstrapped.
 
 ```php MyApplication.php
-use dev\winterframework\stereotype\Application;
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterWebSwooleApplication;
 use dev\winterframework\txn\stereotype\EnableTransactionManagement;
-use dev\winterframework\web\WinterWebApplication;
 
 #[EnableTransactionManagement]
-#[Application]
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/config'],
+    scanNamespaces: [
+        ['com\\example\\myapp', __DIR__ . '/src']
+    ]
+)]
 class MyApplication {
     public static function main(): void {
-        (new WinterWebApplication())->run(MyApplication::class);
+        (new WinterWebSwooleApplication())->run(MyApplication::class);
     }
 }
 ```

@@ -1,7 +1,7 @@
 ---
-title: "Configure Your Winter Boot Application"
+title: "Configuration in Winter Boot: Properties, Beans & Sources"
 sidebarTitle: "Configuration"
-description: "Set up application.yml, inject properties with #[Value], define beans in #[Configuration] classes, chain multiple property sources, and use fallback syntax for safe defaults."
+description: "Configure Winter Boot with application.yml, inject values with #[Value], define beans in #[Configuration] classes, and use property-source fallback chains."
 ---
 
 Winter Boot's configuration system is built around two complementary models: static property externalisation via `application.yml` and programmatic bean construction via `#[Configuration]` classes. Both are fully integrated with the dependency-injection container, so any property or bean is available for injection anywhere in your application. This page covers every layer of the system — from the YAML file structure and the `#[Value]` attribute, through additional property sources, to the `||` fallback-chain syntax.
@@ -328,12 +328,29 @@ datasource:
 Use the `profile` parameter of `#[WinterBootApplication]` to load environment-specific configuration. Winter Boot merges `application-{profile}.yml` on top of the base `application.yml`, with profile-specific values taking precedence.
 
 ```php Application.php
+<?php
+
+declare(strict_types=1);
+
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterWebSwooleApplication;
+
+require_once __DIR__ . '/vendor/autoload.php';
+
 #[WinterBootApplication(
     configDirectory: [__DIR__ . '/config'],
     scanNamespaces: [['com\\example\\myapp', __DIR__ . '/src']],
     profile: 'prod'   // loads config/application-prod.yml
 )]
-class Application { ... }
+class Application
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(Application::class);
+    }
+}
+
+Application::main();
 ```
 
 ```yaml config/application-prod.yml

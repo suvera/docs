@@ -1,7 +1,7 @@
 ---
-title: "Aspect-Oriented Programming in Winter Boot"
+title: "Winter Boot AOP: Aspect-Oriented Programming Guide"
 sidebarTitle: "AOP"
-description: "Apply cross-cutting concerns like transactions, caching, and access control to managed bean methods using PHP 8 attributes and Winter Boot's interceptor pipeline."
+description: "Add transactions, caching, and async execution to Winter Boot beans using PHP 8 AOP attributes and the WinterAspect interceptor pipeline."
 ---
 
 Aspect-Oriented Programming (AOP) lets you attach behaviour to method calls without modifying the method itself. In Winter Boot, AOP is expressed entirely through PHP 8 attributes. When the container detects an AOP attribute on a managed bean's method, it wraps that method with an interceptor chain. The original method body only runs if every interceptor in the chain allows it — making it trivial to enforce security checks, manage transactions, or add caching with a single attribute. All AOP contracts live in the `dev\winterframework\stereotype\aop\` namespace.

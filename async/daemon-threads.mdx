@@ -1,7 +1,7 @@
 ---
-title: "Long-Running Daemon Threads in Winter Boot"
+title: "Supervised Daemon Threads for Winter Boot Applications"
 sidebarTitle: "Daemon Threads"
-description: "Create supervised background processes with #[DaemonThread] that start with your app, run indefinitely, and restart automatically on crash or out-of-memory error."
+description: "Create supervised background processes with #[DaemonThread] that start with your app, run indefinitely, and restart automatically on crash or OOM."
 ---
 
 A **Daemon Thread** in Winter Boot is a long-running background process that starts with your application and keeps running for its entire lifetime. Despite the name, it is not an OS thread or a Java-style thread — it is a dedicated Swoole child process supervised by the framework. Daemon threads are the right tool for work that must always be running: polling a queue, tailing a log stream, monitoring external systems, or processing rows from a database table in a continuous loop. The framework automatically restarts a daemon if it exits unexpectedly due to an out-of-memory error or an unhandled exception, so you never need to wire up your own process supervisor for these use cases.

@@ -1,7 +1,7 @@
 ---
-title: "Map HTTP Requests with Winter Boot Attributes"
+title: "HTTP Request Mapping with Winter Boot PHP 8 Attributes"
 sidebarTitle: "Request Mapping"
-description: "Route HTTP requests to controller methods using #[RequestMapping], method shortcut attributes, and parameter binding with PathVariable, RequestParam, and RequestBody."
+description: "Route requests in Winter Boot using #[RequestMapping], method shortcuts #[GetMapping] and #[PostMapping], plus #[PathVariable] and #[RequestParam]."
 ---
 
 Winter Boot uses PHP 8 native attributes for routing. Instead of maintaining a central routes file, you place mapping attributes directly on controller methods — or on the controller class itself to establish a base URI prefix. The framework reads these attributes at startup, builds a routing table, and dispatches every incoming request to the correct handler with all parameters already bound and type-cast.

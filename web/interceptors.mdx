@@ -1,7 +1,7 @@
 ---
-title: "HTTP Interceptors for Pre- and Post-Processing"
+title: "HTTP Interceptors: Pre- and Post-Processing in Winter Boot"
 sidebarTitle: "Interceptors"
-description: "Add cross-cutting concerns like authentication, rate limiting, and audit logging to your Winter Boot app using ControllerInterceptor and HandlerInterceptor."
+description: "Intercept HTTP requests in Winter Boot using ControllerInterceptor for per-controller scope and HandlerInterceptor for application-wide URI matching."
 ---
 
 Before a request reaches a REST controller method — and again after the method returns — Winter Boot passes the request through a chain of interceptors. Interceptors are the right place for cross-cutting concerns such as authentication, authorisation, rate limiting, audit logging, and response decoration. They operate only on requests destined for `#[RestController]` classes; static assets and non-controller routes bypass the interceptor pipeline entirely.

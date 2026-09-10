@@ -1,7 +1,7 @@
 ---
-title: "Monitor Your App with the Winter Boot Actuator"
+title: "Monitor Your Application with the Winter Boot Actuator"
 sidebarTitle: "Actuator"
-description: "Enable built-in HTTP endpoints to inspect beans, configuration, environment, scheduled tasks, health indicators, and application info without writing controller code."
+description: "Enable built-in HTTP endpoints to inspect beans, environment, health indicators, and application info without writing any controller code."
 ---
 
 The Winter Boot Actuator is a built-in observability layer that exposes operational information about your running application through HTTP endpoints. Without writing any controller code you can inspect registered beans, active configuration properties, environment variables, scheduled tasks, request mappings, and the health of your application's dependencies. The Actuator is designed for microservice environments where monitoring agents, load balancers, and orchestration platforms need a reliable, machine-readable way to query application state.
@@ -49,7 +49,7 @@ Setting `management.endpoints.enabled: false` (or omitting it entirely) disables
 
 | Endpoint | Default path | Description |
 |---|---|---|
-| `beans` | `acme/beans` | Lists all Spring-style beans registered in the application context. |
+| `beans` | `acme/beans` | Lists all beans registered in the Winter Boot application context. |
 | `configprops` | `acme/configprops` | Displays all `#[ConfigurationProperties]` bound values. |
 | `env` | `acme/env` | Exposes environment variables and application properties. |
 | `health` | `acme/health` | Aggregated health status from all registered `HealthIndicator` beans. |

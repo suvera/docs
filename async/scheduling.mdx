@@ -1,7 +1,7 @@
 ---
-title: "Schedule Recurring Tasks with Cron Expressions"
+title: "Recurring Background Tasks with #[Scheduled] in Winter Boot"
 sidebarTitle: "Scheduling"
-description: "Declare recurring background tasks directly in PHP using #[Scheduled]. Run on fixed intervals or fixed delays without external cron jobs or process managers."
+description: "Declare recurring background tasks in PHP using #[Scheduled]. Run on fixed intervals or fixed delays without external cron jobs or process managers."
 ---
 
 Winter Boot's scheduling system lets you declare recurring tasks directly on service or component bean methods using the `#[Scheduled]` attribute. Rather than managing cron jobs externally, you embed timing logic inside your application code, and the framework handles process lifecycle and execution. Scheduled tasks run inside a **dedicated worker process** separate from the HTTP workers — this means a slow or long-running task never blocks web request handling. All you need is the Swoole extension and a single annotation on your application class to activate the feature.

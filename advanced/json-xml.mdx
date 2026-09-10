@@ -1,7 +1,7 @@
 ---
-title: "JSON and XML Serialization in Winter Boot"
+title: "JSON and XML Data Binding in Winter Boot with PHP 8"
 sidebarTitle: "JSON & XML"
-description: "Map JSON and XML payloads to typed PHP objects using PHP 8 attributes. Covers JsonProperty, PAXB XML binding, ObjectCreator, and content-type-aware REST controllers."
+description: "Map JSON and XML payloads to typed PHP objects using PHP 8 attributes. Covers JsonProperty, PAXB XML binding, ObjectCreator, and content negotiation."
 ---
 
 Winter Boot provides first-class support for mapping JSON and XML payloads to strongly typed PHP objects using PHP 8 attributes. Annotate your model properties with `#[JsonProperty]` or the PAXB attributes (`#[XmlElement]`, `#[XmlAttribute]`, and friends), then let `ObjectCreator` or your REST controller deserialize the incoming data automatically. No boilerplate mapping code is required — the framework inspects attribute metadata at runtime and populates each field, including nested objects and typed lists. The same DTO class can carry both JSON and XML annotations, so a single object handles either format depending on the request's `Content-Type` header.

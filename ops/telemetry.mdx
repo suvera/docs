@@ -1,7 +1,7 @@
 ---
-title: "Distributed Tracing and Telemetry Integration"
+title: "Distributed Tracing and Telemetry with OpenTelemetry"
 sidebarTitle: "Telemetry"
-description: "Integrate OpenTelemetry into Winter Boot to capture distributed traces, increment metrics counters, and emit correlated structured logs with minimal configuration."
+description: "Integrate OpenTelemetry into Winter Boot to capture distributed traces, metrics counters, and correlated structured logs with minimal configuration."
 ---
 
 Winter Boot provides first-class integration with OpenTelemetry (OTel), covering all three observability pillars: **distributed traces**, **metrics**, and **structured logs**. The integration is delivered as an optional module (`OpenTelemetryModule`) so it has zero overhead when disabled. Once enabled, you can instrument web requests automatically via an interceptor, annotate individual methods for fine-grained tracing or counting, and inject telemetry beans anywhere in your application.

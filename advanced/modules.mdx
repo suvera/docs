@@ -1,7 +1,7 @@
 ---
-title: "Extend Winter Boot with Modules and Integrations"
+title: "Winter Boot Modules: Build and Integrate Extensions"
 sidebarTitle: "Modules"
-description: "Package reusable infrastructure as pluggable Winter Boot modules. Covers the WinterModule interface, first-party community modules, and building your own custom module."
+description: "Package reusable infrastructure as pluggable Winter Boot modules. Covers WinterModule interface, first-party modules, and building custom modules."
 ---
 
 Winter Boot's module system gives you a clean, attribute-driven mechanism for bundling infrastructure integrations — Redis, Kafka, Doctrine ORM, service discovery, and more — as self-contained, reusable units. Modules are discovered and loaded before the application starts, so each module can register its own beans, scan additional namespaces, and run any required initialisation without touching your application code. The `WinterModule` interface keeps the contract minimal: implement two lifecycle hooks and annotate your class with `#[Module]`.

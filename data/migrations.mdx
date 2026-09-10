@@ -1,7 +1,7 @@
 ---
-title: "Run Database Migrations in Winter Boot"
+title: "Running Versioned SQL Database Migrations in Winter Boot"
 sidebarTitle: "Migrations"
-description: "Execute versioned SQL scripts against single or multi-tenant datasources, track applied migrations automatically, and integrate with Kubernetes init containers."
+description: "Run versioned SQL scripts against any datasource, track applied migrations automatically, and support multi-tenant and Kubernetes deployments."
 ---
 
 Winter Boot includes a standalone SQL migration tool that executes plain `.sql` files against your configured datasources and tracks each applied migration in a `winter_migrations` table. Version state is determined by the relative file path — if a path has already been recorded in the tracking table, the file is skipped on subsequent runs. This gives you repeatable, idempotent deploys without requiring any migration-specific DSL.

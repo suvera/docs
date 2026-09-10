@@ -1,7 +1,7 @@
 ---
-title: "Dependency Injection with PHP 8 Attributes"
+title: "Dependency Injection with PHP 8 Attributes in Winter Boot"
 sidebarTitle: "Dependency Injection"
-description: "Learn how Winter Boot's IoC container discovers beans, wires dependencies with PHP 8 attributes, and gives you programmatic access to the application context."
+description: "Learn how Winter Boot's IoC container discovers beans, wires dependencies, and provides programmatic access to the application context."
 ---
 
 Winter Boot uses a pure attribute-driven IoC container. Every class you annotate with a stereotype — `#[Service]`, `#[Component]`, or `#[Configuration]` — is discovered during namespace scanning at startup, instantiated once as a singleton, and registered in the bean registry. Dependencies between beans are expressed with `#[Autowired]` on class properties, and the container resolves and injects them automatically so you never call `new` on a managed object. All stereotype attributes live in the `dev\winterframework\stereotype\` namespace.
@@ -190,7 +190,7 @@ class CacheConfig {
 
 </CodeGroup>
 
-The `initMethod` is called right after the bean is constructed. `destroyMethod` is registered with `ShutDownRegistry` and called when the process exits.
+The `initMethod` is called right after the bean is constructed. `destroyMethod` is registered and called when the process exits.
 
 <Note>
   `#[Bean]` factory methods are **not** subject to the `Impl`-suffix aliasing

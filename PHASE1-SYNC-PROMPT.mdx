@@ -1,0 +1,375 @@
+---
+title: "PHASE1 SYNC PROMPT"
+---
+
+# Phase 1 — Documentation sync workflow for the Winter ecosystem
+
+Copy everything below into your coding agent (Claude Code, Cursor, Aider, etc.) after cloning all six repos locally.
+
+---
+
+## Task
+
+You are configuring a documentation synchronization workflow between five source repositories and one docs repository. All six repos are owned by the GitHub user `suvera`. Do NOT modify source code, READMEs, or documentation content in any repo. Only add the workflow/config files listed below.
+
+### Repositories
+
+- **Docs repo (target of PRs):** `suvera/docs` — Mintlify site, deployed to `suvera.mintlify.app`
+- **Source repos (open PRs against docs):**
+  - `suvera/winter-boot` (parent framework)
+  - `suvera/winter-modules` (submodules: kafka, sqs, s3, opensearch, dtce, data-redis, data-memcache, security)
+  - `suvera/winter-doctrine`
+  - `suvera/winter-eureka`
+  - `suvera/winter-memdb`
+
+### Goals
+
+1. On push to `main` or tag push in any source repo, detect if doc-relevant files changed, and open (or update) a PR in `suvera/docs` describing the change.
+2. Nightly cron job in `suvera/docs` compares each source repo's `main` HEAD against a recorded SHA and opens catch-up PRs for any drift.
+3. Never auto-merge. Never overwrite files under `core/`, `web/`, `data/`, `async/`, `ops/`, `building/`, `advanced/`, `modules/`, `reference/`, `sources/`, or `docs.json` in `suvera/docs`. The sync PR only edits `sync-state.json` and appends a report file under `sync-reports/`.
+4. Keep Mintlify's existing deployment (push-to-main auto-deploy) untouched.
+
+### Constraints
+
+- Use only GitHub Actions, `actions/checkout`, `actions/github-script`, and `peter-evans/create-pull-request`. No third-party sync services.
+- The docs repo already exists with this structure: `index.mdx`, `quickstart.mdx`, `introduction.mdx`, `configuration.mdx`, and directories `core/`, `web/`, `data/`, `async/`, `ops/`, `building/`, `advanced/`, `modules/`, `reference/`, `sources/`, plus `docs.json`. Do not touch any of these.
+- Do not add code generators, symbol scanners, generated-block markers, or MDX linters yet. Those are Phase 2.
+
+### PAT / auth
+
+Create a fine-grained GitHub PAT with `contents: write` and `pull-requests: write` on `suvera/docs`. Store it as secret `DOCS_SYNC_PAT` in each of the five source repos. The docs repo's own workflows use the default `GITHUB_TOKEN`.
+
+---
+
+## Files to create
+
+### 1. In each source repo (5 repos)
+
+#### `docs-relevant-paths.yml` (repo root)
+
+For **`winter-boot`**:
+
+```yaml
+# Paths whose changes should trigger a docs sync PR.
+# Consumed by .github/workflows/notify-docs.yml.
+version: 1
+repo: suvera/winter-boot
+always_relevant:
+  - README.md
+  - CHANGELOG.md
+  - docs/**
+  - resources/config/**
+  - src/stereotype/**       # user-facing #[Attribute] classes
+  - bin/**                  # CLI entry points
+maybe_relevant:
+  - src/**/*Template.php
+  - src/**/*Client.php
+  - src/**/*Service.php
+  - composer.json
+never_relevant:
+  - srcTests/**
+  - tests/**
+  - .github/**
+  - .editorconfig
+  - .gitignore
+docs_pages:                 # informational, listed in the PR body
+  - "README.md": introduction.mdx
+  - "src/stereotype/**": reference/attributes.mdx
+  - "resources/config/**": reference/application-yml.mdx
+  - "bin/**": building/cli-commands.mdx
+```
+
+For **`winter-modules`**, use `always_relevant`/`never_relevant` as above and this `docs_pages`:
+
+```yaml
+docs_pages:
+  - "README.md": modules/overview.mdx
+  - "src/kafka/**": modules/kafka.mdx
+  - "src/sqs/**": modules/sqs.mdx
+  - "src/s3/**": modules/s3.mdx
+  - "src/opensearch/**": modules/opensearch.mdx
+  - "src/dtce/**": modules/dtce.mdx
+  - "src/data/redis/**": modules/data-redis.mdx
+  - "src/data/memcache/**": modules/data-memcache.mdx
+  - "src/security/**": modules/security.mdx
+```
+
+For **`winter-doctrine`** → `docs_pages: [{"README.md": modules/doctrine.mdx}]`.
+For **`winter-eureka`** → `modules/eureka.mdx`.
+For **`winter-memdb`** → `modules/memdb.mdx`.
+
+Same `always_relevant` / `never_relevant` structure for all five.
+
+#### `.github/workflows/notify-docs.yml`
+
+```yaml
+name: Notify docs repo of relevant changes
+
+on:
+  push:
+    branches: [main]
+  create:                     # fires for tag creation
+  workflow_dispatch:
+
+concurrency:
+  group: notify-docs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    if: github.event_name != 'create' || github.event.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50     # enough history for the compare range
+
+      - name: Determine compare range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "create" ]; then
+            echo "base=$(git rev-list --max-parents=0 HEAD | head -n1)" >> "$GITHUB_OUTPUT"
+            echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ github.event.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+            echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute changed files
+        id: diff
+        run: |
+          BASE="${{ steps.range.outputs.base }}"
+          HEAD="${{ steps.range.outputs.head }}"
+          if ! git cat-file -e "$BASE" 2>/dev/null; then BASE=$(git rev-list --max-parents=0 HEAD | head -n1); fi
+          git diff --name-only "$BASE" "$HEAD" > changed.txt || true
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          cat changed.txt
+
+      - name: Install js-yaml + minimatch
+        run: npm install --no-save js-yaml minimatch@9
+
+      - name: Filter against docs-relevant-paths.yml
+        id: filter
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+            const { minimatch } = require('minimatch');
+            const spec = yaml.load(fs.readFileSync('docs-relevant-paths.yml', 'utf8'));
+            const changed = fs.readFileSync('changed.txt', 'utf8').split('\n').filter(Boolean);
+            const match = (p, pats) => (pats || []).some(g => minimatch(p, g, { dot: true }));
+            const relevant = changed.filter(p =>
+              !match(p, spec.never_relevant) &&
+              (match(p, spec.always_relevant) || match(p, spec.maybe_relevant))
+            );
+            core.setOutput('relevant', JSON.stringify(relevant));
+            core.setOutput('relevant_count', String(relevant.length));
+
+      - name: Skip if nothing relevant
+        if: steps.filter.outputs.relevant_count == '0'
+        run: echo "No doc-relevant changes. Exiting."
+
+      - name: Checkout docs repo
+        if: steps.filter.outputs.relevant_count != '0'
+        uses: actions/checkout@v4
+        with:
+          repository: suvera/docs
+          token: ${{ secrets.DOCS_SYNC_PAT }}
+          path: docs-repo
+          fetch-depth: 1
+
+      - name: Write sync report
+        if: steps.filter.outputs.relevant_count != '0'
+        env:
+          RELEVANT: ${{ steps.filter.outputs.relevant }}
+          SRC_REPO: ${{ github.repository }}
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+          TAG: ${{ steps.range.outputs.tag }}
+        run: |
+          set -e
+          cd docs-repo
+          mkdir -p sync-reports
+          SLUG="${SRC_REPO/\//-}"
+          REPORT="sync-reports/${SLUG}-${HEAD:0:7}.md"
+          {
+            echo "# Sync report: $SRC_REPO"
+            echo
+            echo "- Source repo: \`$SRC_REPO\`"
+            echo "- Compare: \`$BASE..$HEAD\`"
+            [ -n "$TAG" ] && echo "- Tag: \`$TAG\`"
+            echo "- Generated: $(date -u +%FT%TZ)"
+            echo
+            echo "## Doc-relevant files changed"
+            echo
+            echo "$RELEVANT" | jq -r '.[]' | sed 's|^|- `|;s|$|`|'
+            echo
+            echo "## Suggested docs pages to review"
+            echo
+            echo "See mapping in \`docs-relevant-paths.yml\` in $SRC_REPO."
+          } > "$REPORT"
+          node -e "
+            const fs=require('fs'); const p='sync-state.json';
+            const j=fs.existsSync(p)?JSON.parse(fs.readFileSync(p)):{repos:{}};
+            j.repos = j.repos || {};
+            j.repos['${SRC_REPO}'] = {
+              branch: 'main',
+              last_synced_sha: '${HEAD}',
+              last_synced_at: new Date().toISOString(),
+              last_synced_tag: '${TAG}' || null
+            };
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+          "
+
+      - name: Open or update PR in docs repo
+        if: steps.filter.outputs.relevant_count != '0'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: docs-repo
+          token: ${{ secrets.DOCS_SYNC_PAT }}
+          branch: sync/${{ github.repository }}-${{ steps.range.outputs.head }}
+          base: main
+          commit-message: |
+            sync: ${{ github.repository }}@${{ steps.range.outputs.head }}
+          title: "sync: ${{ github.repository }} → ${{ steps.range.outputs.head }}"
+          labels: |
+            sync
+            sync/${{ github.repository }}
+          body: |
+            Automated sync report from **${{ github.repository }}**.
+
+            - Compare: `${{ steps.range.outputs.base }}..${{ steps.range.outputs.head }}`
+            - Tag: `${{ steps.range.outputs.tag }}`
+            - Files: see `sync-reports/` in this PR
+            - No documentation page is modified by this PR. A human reviewer decides which pages to update, then commits those changes on this branch or a follow-up branch.
+
+            **Do not merge without reviewing the report and applying any needed doc edits.**
+          add-paths: |
+            sync-reports/**
+            sync-state.json
+```
+
+### 2. In `suvera/docs`
+
+#### `sync-state.json` (repo root, initial content)
+
+```json
+{
+  "description": "Last-synced commit SHA per source repo. Updated by inbound sync PRs and by .github/workflows/sync-nightly.yml.",
+  "repos": {
+    "suvera/winter-boot":     { "branch": "main", "last_synced_sha": null, "last_synced_at": null, "last_synced_tag": null },
+    "suvera/winter-modules":  { "branch": "main", "last_synced_sha": null, "last_synced_at": null, "last_synced_tag": null },
+    "suvera/winter-doctrine": { "branch": "main", "last_synced_sha": null, "last_synced_at": null, "last_synced_tag": null },
+    "suvera/winter-eureka":   { "branch": "main", "last_synced_sha": null, "last_synced_at": null, "last_synced_tag": null },
+    "suvera/winter-memdb":    { "branch": "main", "last_synced_sha": null, "last_synced_at": null, "last_synced_tag": null }
+  }
+}
+```
+
+#### `sync-reports/.gitkeep` (empty file)
+
+#### `.github/CODEOWNERS`
+
+```
+# Sync PRs require human review.
+sync-reports/*  @suvera
+sync-state.json @suvera
+```
+
+#### `.github/workflows/sync-nightly.yml`
+
+```yaml
+name: Nightly source-repo drift check
+
+on:
+  schedule:
+    - cron: '17 6 * * *'      # 06:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - suvera/winter-boot
+          - suvera/winter-modules
+          - suvera/winter-doctrine
+          - suvera/winter-eureka
+          - suvera/winter-memdb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get remote HEAD SHA
+        id: remote
+        run: |
+          SHA=$(git ls-remote https://github.com/${{ matrix.repo }}.git refs/heads/main | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Read last synced SHA
+        id: local
+        run: |
+          SHA=$(jq -r ".repos[\"${{ matrix.repo }}\"].last_synced_sha // \"\"" sync-state.json)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if in sync
+        if: steps.remote.outputs.sha == steps.local.outputs.sha
+        run: echo "No drift for ${{ matrix.repo }}."
+
+      - name: Open drift PR
+        if: steps.remote.outputs.sha != steps.local.outputs.sha
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: sync/nightly-${{ matrix.repo }}
+          base: main
+          commit-message: "sync: nightly drift detected for ${{ matrix.repo }}"
+          title: "sync: nightly drift — ${{ matrix.repo }}"
+          labels: |
+            sync
+            sync/nightly
+          body: |
+            Nightly drift detector found new commits on `${{ matrix.repo }}@main` that have not been reflected in the docs.
+
+            - Last synced: `${{ steps.local.outputs.sha }}`
+            - Current HEAD: `${{ steps.remote.outputs.sha }}`
+            - Compare: https://github.com/${{ matrix.repo }}/compare/${{ steps.local.outputs.sha }}...${{ steps.remote.outputs.sha }}
+
+            This PR does not edit any docs page. A human reviewer decides what to update, then commits changes on this branch.
+```
+
+### 3. Branch protection on `suvera/docs`
+
+Configure via GitHub UI or `gh` CLI:
+
+- Require pull-request review before merging `main`.
+- Disallow force-pushes to `main`.
+- Do NOT require CI status checks yet (Phase 2 will add MDX/link validation).
+
+---
+
+## Acceptance test
+
+After all commits land:
+
+1. Push a trivial edit to `README.md` in `suvera/winter-boot`. Within ~1 minute a PR titled `sync: suvera/winter-boot → <sha>` appears in `suvera/docs` with a report file under `sync-reports/`.
+2. Manually run the nightly workflow (`gh workflow run sync-nightly.yml -R suvera/docs`). If any source repo has drifted, drift PRs appear.
+3. Confirm no PR modifies files outside `sync-reports/` and `sync-state.json`.
+4. Confirm the Mintlify deploy is unaffected (existing `main` deploy behavior).
+
+## Deliverables to report back
+
+Reply with:
+
+- Commit URL for each of the 6 repos.
+- Whether the acceptance test PR appeared.
+- Any repo where the workflow could not be added and why.
+- Confirmation that no source code, README, or docs page was modified.

@@ -8,24 +8,10 @@ Winter SQS is an AWS SQS module for Winter Boot that provides both producer (sen
 
 ## Setup
 
-### Autoload and dependencies
+Require the modules package with Composer (it pulls in `aws/aws-sdk-php`):
 
-Add the `winter-sqs` directory path to your project's `composer.json` `autoload.psr-4` block:
-
-```json
-{
-  "autoload": {
-    "psr-4": {
-      "dev\\winterframework\\sqs\\": "winter-sqs/src/"
-    }
-  }
-}
-```
-
-Also make sure the AWS SDK for PHP is installed:
-
-```bash
-composer require aws/aws-sdk-php
+```shell
+composer require suvera/winter-modules
 ```
 
 Enable the module in your **application.yml**:

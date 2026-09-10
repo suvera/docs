@@ -1,3 +1,127 @@
 ---
-title: "s3"
+title: "Winter S3: S3 Object Storage Module"
+sidebarTitle: "S3"
+mode: "wide"
+description: "Winter S3 adds AWS S3 object storage to Winter Boot. Configure named connections, inject S3Template, and call the full S3 API with access keys or IAM roles."
 ---
+
+Winter S3 is a module that provides easy configuration and access to S3 object storage (or S3-compatible services) from Winter Boot applications. Each named entry in `s3-config.yml` builds an `Aws\S3\S3Client` and registers an `S3Template` bean, so you can talk to multiple buckets, regions, or accounts from the same service. If you already use the [SQS](/modules/sqs) module, the configuration patterns here, like named connections and IAM-role credentials, will feel familiar.
+
+## Setup
+
+Require the modules package with Composer (it pulls in `aws/aws-sdk-php`):
+
+```shell
+composer require suvera/winter-modules
+```
+
+Enable the module in your **application.yml**:
+
+```yaml
+modules:
+  - module: dev\winterframework\s3\S3Module
+    enabled: true
+    configFile: s3-config.yml
+```
+
+`configFile` is a file path relative to your config directory or an absolute path.
+
+## s3-config.yml
+
+Each entry under `s3` is a named connection. Only `name`, `region`, and `version` are mandatory; omit `credentials` to use IAM roles or the default credential chain.
+
+```yaml
+s3:
+  - name: MyS3East
+    version: latest
+    region: us-east-1
+    credentials:
+      - key: a
+        secret: b
+        token: c
+    retries: 5
+
+  - name: MyS3West
+    version: latest
+    region: us-west-2
+    # no credentials: resolved from IAM role / default chain
+    endpoint: https://s3.us-west-2.amazonaws.com
+    retries: 5
+```
+
+Set `endpoint` to talk to an S3-compatible store instead of AWS.
+
+## Autowired services
+
+`S3Template` is the primary service for object operations. The first registered template is the default bean; refer to any other connection by its `name`:
+
+```php
+use dev\winterframework\s3\S3Template;
+use dev\winterframework\stereotype\Autowired;
+
+class MyService {
+
+    #[Autowired]
+    private S3Template $s3;
+
+    #[Autowired("MyS3West")]
+    private S3Template $westS3;
+
+    public function doSomething(): void {
+        // Upload through the default connection
+        $this->s3->putObject([
+            'Bucket' => 'my-bucket',
+            'Key' => 'path/to/file.txt',
+            'Body' => 'Hello, World!',
+            'ContentType' => 'text/plain',
+        ]);
+
+        // Download through the "MyS3West" connection
+        $result = $this->westS3->getObject([
+            'Bucket' => 'my-bucket',
+            'Key' => 'path/to/file.txt',
+        ]);
+        $content = $result['Body']->getContents();
+    }
+}
+```
+
+`S3Template` exposes the full AWS S3 API through magic methods. Every method accepts the same associative-array parameters as the AWS SDK for PHP client and returns an `Aws\Result`. Common operations include `putObject`, `getObject`, `headObject`, `deleteObject`, `deleteObjects`, `listObjectsV2`, `copyObject`, `createBucket`, `deleteBucket`, `headBucket`, `listBuckets`, bucket/object ACLs, versioning, lifecycle, CORS, tagging, and multipart uploads.
+
+## Connection properties
+
+| Property | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| name | string | yes | - | Unique connection name; also the bean name |
+| region | string | yes | - | AWS region (for example, `us-east-1`) |
+| version | string | yes | - | API version, usually `latest` |
+| credentials | array | no | - | AWS key/secret/token. Omit for IAM roles. |
+| endpoint | string | no | - | Custom endpoint for S3-compatible stores |
+| retries | int | no | SDK default | Retry count for failed requests |
+| use_path_style_endpoint | bool | no | SDK default | Use path-style URLs |
+| signature_version | string | no | SDK default | Signature version, usually `v4` |
+| scheme | string | no | SDK default | `https` or `http` |
+| debug | bool | no | `false` | SDK debug output |
+| http | array | no | - | Guzzle HTTP handler options |
+| http_handler | callable | no | - | Custom HTTP handler (supersedes `handler`) |
+| handler | callable | no | - | Custom handler |
+
+Any other [S3Client configuration option](https://docs.aws.amazon.com/sdk-for-php/v3/developer-guide/guide_configuration.html) may be set alongside these.
+
+## Using IAM roles (no keys required)
+
+When your application runs on AWS infrastructure (EKS, EC2, Lambda, ECS, and so on), you do **not** need to specify `credentials`. The AWS SDK automatically picks up the IAM role through the default credential chain:
+
+```yaml
+s3:
+  - name: MyS3East
+    version: latest
+    region: us-east-1
+    retries: 5
+```
+
+For EKS, annotate your Kubernetes ServiceAccount with the role ARN (`eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/my-s3-role`) and omit the `credentials` block.
+
+<Tip>
+  For AWS-managed queues alongside object storage, see the [SQS](/modules/sqs) module.
+</Tip>

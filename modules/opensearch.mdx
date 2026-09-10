@@ -1,3 +1,195 @@
 ---
-title: "opensearch"
+title: "Winter OpenSearch: Search and Analytics Module"
+sidebarTitle: "OpenSearch"
+mode: "wide"
+description: "Winter OpenSearch adds full-text search and analytics to Winter Boot. Configure clusters, inject OpenSearchTemplate, and use basic auth or AWS SigV4 signing."
 ---
+
+Winter OpenSearch is a module that provides easy configuration and access to OpenSearch (or compatible search services) from Winter Boot applications. Each named entry in `opensearch-config.yml` builds an OpenSearch client and registers an `OpenSearchTemplate` bean, so you can talk to multiple clusters from the same service. When the `swoole` extension is loaded, requests are dispatched through a coroutine HTTP handler automatically.
+
+## Setup
+
+Require the modules package with Composer (it pulls in `opensearch-project/opensearch-php`):
+
+```shell
+composer require suvera/winter-modules
+```
+
+Enable the module in your **application.yml**:
+
+```yaml
+modules:
+  - module: dev\winterframework\opensearch\OpenSearchModule
+    enabled: true
+    configFile: opensearch-config.yml
+```
+
+`configFile` is a file path relative to your config directory or an absolute path.
+
+## opensearch-config.yml
+
+Each entry under `opensearch` is a named cluster connection. Only `name` and `hosts` are mandatory.
+
+```yaml
+opensearch:
+  - name: default
+    hosts:
+      - http://localhost:9200
+    # username: admin
+    # password: admin
+    # retries: 3
+    # ssl_verification: true
+    # sniff_on_start: false
+    # connection_params: # extra RingPHP/cURL client options
+    #   - client:
+    #       curl:
+    #         10002: 5   # e.g. CURLOPT_CONNECTTIMEOUT
+```
+
+### Using basic authentication
+
+```yaml
+opensearch:
+  - name: default
+    hosts:
+      - https://localhost:9200
+    username: admin
+    password: admin
+    ssl_verification: false   # only disable for local/dev clusters
+```
+
+### Using Amazon OpenSearch Service (AWS)
+
+Amazon OpenSearch Service (and OpenSearch Serverless) require every request to be signed with **AWS Signature Version 4**. Set the `aws` section and the module signs each request on top of the configured handler:
+
+```yaml
+opensearch:
+  - name: aws_opensearch
+    hosts:
+      - https://your-domain.us-east-1.es.amazonaws.com
+    aws:
+      - region: us-east-1
+        service: es    # "es" for Amazon OpenSearch Service, "aoss" for Serverless
+        # credentials: # optional; omit to use the default provider chain
+        #   - key: your_access_key
+        #     secret: your_secret_key
+        #     token: your_session_token
+```
+
+## Autowired services
+
+`OpenSearchTemplate` is the primary service for search operations. The first registered template is the default bean; refer to any other cluster by its `name`:
+
+```php
+use dev\winterframework\opensearch\OpenSearchTemplate;
+use dev\winterframework\stereotype\Autowired;
+
+class MyService {
+
+    #[Autowired]
+    private OpenSearchTemplate $openSearch;
+
+    #[Autowired("aws_opensearch")]
+    private OpenSearchTemplate $awsSearch;
+
+    public function doSomething(): void {
+        // Index a document through the default cluster
+        $this->openSearch->index([
+            'index' => 'my_index',
+            'body' => ['field' => 'value'],
+        ]);
+
+        // Search through the AWS cluster
+        $result = $this->awsSearch->search([
+            'index' => 'my_index',
+            'body' => [
+                'query' => [
+                    'match' => ['field' => 'value'],
+                ],
+            ],
+        ]);
+    }
+}
+```
+
+## Connection properties
+
+| Property | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| name | string | yes | - | Unique connection name; also the bean name |
+| hosts | array | yes | - | Cluster URLs (for example, `https://localhost:9200`) |
+| username | string | no | - | Basic-auth username (set together with `password`) |
+| password | string | no | - | Basic-auth password |
+| retries | int | no | client default | Retry count for failed requests |
+| ssl_verification | bool | no | client default | Verify TLS certificates |
+| sniff_on_start | bool | no | client default | Sniff cluster nodes on connect |
+| connection_params | array | no | - | Extra RingPHP/cURL client options |
+| aws | array | no | - | AWS SigV4 signing (`region`, `service`, `credentials`) |
+| http_handler | callable | no | Swoole when available | Custom RingPHP handler |
+| handler | callable | no | - | Fallback custom handler |
+
+In the `aws` section, `region` is required, `service` defaults to `es` (use `aoss` for Serverless), and `credentials` may be omitted to use the default AWS provider chain (environment variables, IAM role, IRSA).
+
+## Document APIs
+
+```php
+// Get a document by id
+$doc = $openSearch->get(['index' => 'my_index', 'id' => 'document_id']);
+
+// Update part of a document
+$openSearch->update([
+    'index' => 'my_index',
+    'id' => 'document_id',
+    'body' => ['doc' => ['field' => 'new_value']],
+]);
+
+// Delete a document
+$openSearch->delete(['index' => 'my_index', 'id' => 'document_id']);
+
+// Index or delete many documents in one round trip
+$openSearch->bulk([
+    'body' => [
+        ['index' => ['_index' => 'my_index', '_id' => '1']],
+        ['field' => 'value1'],
+        ['index' => ['_index' => 'my_index', '_id' => '2']],
+        ['field' => 'value2'],
+    ],
+]);
+
+// Count matching documents
+$count = $openSearch->count([
+    'index' => 'my_index',
+    'body' => ['query' => ['match_all' => new \stdClass()]],
+]);
+```
+
+## Cluster and index APIs
+
+The template also exposes the OpenSearch namespaces for administration and monitoring:
+
+```php
+// Cluster health and node stats
+$health = $openSearch->cluster()->health();
+$stats = $openSearch->nodes()->stats();
+
+// Index management
+$openSearch->indices()->create(['index' => 'my_index']);
+$info = $openSearch->indices()->get(['index' => 'my_index']);
+$openSearch->indices()->delete(['index' => 'my_index']);
+
+// Human-readable overviews
+$indices = $openSearch->cat()->indices();
+$nodes = $openSearch->cat()->nodes();
+
+// Running tasks and snapshots
+$tasks = $openSearch->tasks()->list();
+$snapshots = $openSearch->snapshot()->get(['repository' => 'my_repo']);
+```
+
+## Index migrations
+
+Version your index templates, ISM policies, and index schemas as JSON files and apply them with the built-in migration runner, tracked the same way as SQL migrations. See [OpenSearch Migrations](/data/opensearch-migrations).
+
+<Tip>
+  For object storage alongside search, see the [S3](/modules/s3) module.
+</Tip>

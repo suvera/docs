@@ -1,0 +1,224 @@
+Request Mapping and Route Attributes in Winter Boot PHP 8 - Winter Boot
+
+Web & REST
+
+# Request Mapping and Route Attributes in Winter Boot PHP 8
+
+Map HTTP requests to controller methods in Winter Boot using #[RequestMapping], method shortcut attributes, RequestParam, PathVariable, and RequestBody.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+Winter Boot uses PHP 8 native attributes for routing. Instead of a central routes file, you place mapping annotations directly on controller methods — or on the controller class itself to establish a base URI. The framework reads these attributes at startup, builds a routing table, and dispatches every incoming request to the correct handler with all parameters already bound and type-cast.
+
+---
+
+## `#[RequestMapping]`
+
+`#[RequestMapping]` (namespace `dev\winterframework\stereotype\web\RequestMapping`) can be applied at **class level** to set a base URI prefix, or at **method level** to define the full route for that handler. When both are present the class-level path is prepended to the method-level path automatically.
+
+Parameters:
+- `path` (string|array, required) — The URI pattern for this mapping. Supports `{variable}` placeholders for path variables. Accepts a single string or an array of strings to map multiple paths to the same handler.
+- `method` (array) — List of `RequestMethod` constants that this handler accepts (e.g. `[RequestMethod::GET, RequestMethod::POST]`). Defaults to all HTTP methods when omitted.
+- `name` (string) — An optional human-readable name for this mapping. Useful for logging and debugging.
+- `consumes` (array) — List of media types this handler consumes (e.g. `['application/json']`). Requests with a non-matching `Content-Type` are rejected.
+- `produces` (array) — List of media types this handler produces (e.g. `['application/json']`). Used to negotiate the response `Content-Type`.
+
+### RequestMethod enum values
+
+`RequestMethod` (namespace `dev\winterframework\enums\RequestMethod`) defines constants for every HTTP method the framework accepts in the `method` array:
+
+Constant | HTTP method
+---|---
+`RequestMethod::GET` | GET
+`RequestMethod::HEAD` | HEAD
+`RequestMethod::POST` | POST
+`RequestMethod::PUT` | PUT
+`RequestMethod::PATCH` | PATCH
+`RequestMethod::DELETE` | DELETE
+`RequestMethod::OPTIONS` | OPTIONS
+`RequestMethod::TRACE` | TRACE
+
+### Class-level and method-level paths combined
+
+```
+<?php
+
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\stereotype\web\RequestMapping;
+use dev\winterframework\enums\RequestMethod;
+
+#[RestController]
+#[RequestMapping(path: '/api/v1')]          // base prefix for every method below
+class ProductController
+{
+    // Handled at GET /api/v1/products
+    #[RequestMapping(path: '/products', method: [RequestMethod::GET])]
+    public function listProducts(): array
+    {
+        return [];
+    }
+
+    // Handled at POST /api/v1/products
+    #[RequestMapping(path: '/products', method: [RequestMethod::POST])]
+    public function createProduct(): array
+    {
+        return [];
+    }
+}
+```
+
+Path variables (e.g. `{id}`) are **not** allowed in a class-level `#[RequestMapping]`. They may only appear in method-level path definitions.
+
+---
+
+## HTTP Method Shortcuts
+
+Winter Boot ships five convenience attributes that combine `#[RequestMapping]` with a fixed HTTP method. They accept the same `path`, `name`, `consumes`, and `produces` parameters but never require you to specify `method`.
+
+- `#[GetMapping]`
+- `#[PostMapping]`
+- `#[PutMapping]`
+- `#[DeleteMapping]`
+- `#[PatchMapping]`
+
+```
+use dev\winterframework\stereotype\web\GetMapping;
+
+#[GetMapping(path: '/users')]
+public function listUsers(): array
+{
+    return $this->userService->findAll();
+}
+```
+
+---
+
+## `#[RequestParam]`
+
+`#[RequestParam]` (namespace `dev\winterframework\stereotype\web\RequestParam`) binds a query-string value, POST field, cookie, or HTTP header to a method parameter. It is applied at the **parameter level**.
+
+Parameters:
+- `name` (string) — Name of the incoming parameter. Defaults to the PHP variable name when omitted.
+- `required` (bool) — Whether the parameter must be present in the request. Defaults to `true`. Set to `false` to make it optional.
+- `defaultValue` (mixed) — Value used when the parameter is absent and `required` is `false`.
+- `source` (string) — Where to read the value from. Defaults to `'request'`. See the source table below.
+
+### source values
+
+Value | Reads from
+---|---
+`request` | URL query string **or** POST body (checked in that order)
+`get` | URL query string only (`$_GET`)
+`post` | POST url-encoded / form body only (`$_POST`)
+`cookie` | HTTP cookie (`$_COOKIE`)
+`header` | HTTP request header
+
+```
+use dev\winterframework\stereotype\web\GetMapping;
+use dev\winterframework\stereotype\web\PostMapping;
+use dev\winterframework\stereotype\web\RequestParam;
+
+// Query-string: GET /divide?a=10&b=2
+#[GetMapping(path: '/divide')]
+public function divide(
+    #[RequestParam] int $a,
+    #[RequestParam] int $b,
+): float {
+    return $a / $b;
+}
+
+// Optional parameter with a default value
+#[GetMapping(path: '/greet')]
+public function greet(
+    #[RequestParam(required: false, defaultValue: 'World')] string $name,
+): string {
+    return 'Hello, ' . $name;
+}
+
+// Read from a specific HTTP header
+#[PostMapping(path: '/orders')]
+public function createOrder(
+    #[RequestParam(name: 'X-Tenant-Id', source: 'header')] string $tenantId,
+): array {
+    return $this->orderService->create($tenantId);
+}
+
+// Read from a cookie
+#[GetMapping(path: '/profile')]
+public function profile(
+    #[RequestParam(name: 'session_token', source: 'cookie')] string $token,
+): array {
+    return $this->sessionService->getProfile($token);
+}
+```
+
+`#[RequestParam]` only accepts scalar PHP types (`string`, `int`, `float`, `bool`). Use `source: 'header'` to also accept arrays of header values. Custom classes must use `#[RequestBody]` instead.
+
+---
+
+## `#[PathVariable]`
+
+`#[PathVariable]` (namespace `dev\winterframework\stereotype\web\PathVariable`) binds a URI template segment — the `{placeholder}` in the path string — to a method parameter. The placeholder name must match the PHP variable name (or you can specify it explicitly via the `name` option). Supported scalar types: `string`, `int`, `float`, `bool`.
+
+```
+use dev\winterframework\stereotype\web\GetMapping;
+use dev\winterframework\stereotype\web\PathVariable;
+
+// GET /hello/Alice  →  "Hello, Alice"
+#[GetMapping(path: '/hello/{name}')]
+public function sayHello(#[PathVariable] string $name): string
+{
+    return 'Hello, ' . $name;
+}
+
+// GET /users/42  →  finds user with id 42
+#[GetMapping(path: '/users/{id}')]
+public function getUser(#[PathVariable] int $id): array
+{
+    return $this->userService->findById($id);
+}
+```
+
+Every `{placeholder}` that appears in the path **must** have a matching `#[PathVariable]` parameter, and every `#[PathVariable]` parameter must correspond to a `{placeholder}`. A mismatch raises an `InvalidSyntaxException` at startup.
+
+---
+
+## `#[RequestBody]`
+
+`#[RequestBody]` (namespace `dev\winterframework\stereotype\web\RequestBody`) binds the entire HTTP request body to a method parameter. Winter Boot deserialises JSON payloads **and** URL-encoded form bodies into the target class automatically. The parameter must be type-hinted with a concrete class (or `string` to receive the raw body). Union types are not supported.
+
+```
+use dev\winterframework\stereotype\web\PostMapping;
+use dev\winterframework\stereotype\web\RequestBody;
+
+// Accepts both JSON and url-encoded bodies:
+// {"a": 10, "b": 20}  or  a=10&b=20
+#[PostMapping(path: '/calc/add')]
+public function add(#[RequestBody] AddRequest $request): int
+{
+    return $this->calcService->add($request->a, $request->b);
+}
+```
+
+```
+class AddRequest
+{
+    public int $a;
+    public int $b;
+}
+```
+
+For raw-body access, type-hint the parameter as `string`:
+
+```
+#[PostMapping(path: '/webhooks/ingest')]
+public function ingest(#[RequestBody] string $rawPayload): array
+{
+    $data = json_decode($rawPayload, true);
+    return $this->webhookService->handle($data);
+}
+```
+
+Only one `#[RequestBody]` parameter is allowed per handler method. Combine it freely with `#[PathVariable]` and `#[RequestParam]` parameters in the same method signature.

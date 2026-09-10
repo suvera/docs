@@ -1,0 +1,138 @@
+---
+title: "Distributed Locking to Prevent Race Conditions"
+sidebarTitle: "Locking"
+description: "Apply the #[Lockable] attribute to any bean method to enforce single-threaded execution locally or across an entire cluster using a pluggable LockManager."
+---
+
+Winter Boot's locking abstraction gives you declarative, AOP-based concurrency control over any public bean method. By annotating a method with `#[Lockable]` you guarantee that only one caller can execute that method at a time — either at the local-node level (default) or across an entire cluster when a distributed `LockManager` is provided. Parameter expressions such as `name: "order-#{id}"` allow the lock scope to be narrowed down to a specific resource instance, preventing unnecessary serialization of unrelated requests.
+
+## #[Lockable] Options
+
+<ResponseField name="name" type="string" required>
+  Unique name for the lock. Supports `#{param}` interpolation to bind method parameters into the lock name (e.g. `"order-#{id}"`).
+</ResponseField>
+
+<ResponseField name="lockManager" type="string" default="Framework default">
+  Bean name of a class implementing `LockManager`. Omit to use local node locking.
+</ResponseField>
+
+<ResponseField name="waitMilliSecs" type="int" default="0">
+  How long (in milliseconds) to wait for the lock before failing. `0` means fail immediately if the lock is not available.
+</ResponseField>
+
+<ResponseField name="ttlSeconds" type="int" default="0">
+  Maximum time (in seconds) the lock is held before it is automatically released. `0` means no TTL limit.
+</ResponseField>
+
+## Local Node Locking
+
+The framework provides local node locking out of the box — no extra configuration or bean is needed. Only one process on the same node can execute the annotated method at a time. The `#{id}` syntax binds the method parameter `$id` into the lock name, so two concurrent calls with **different** order IDs proceed in parallel while two calls for the **same** ID are serialized.
+
+<Tabs>
+  <Tab title="Basic Lock">
+
+```php OrderService.php
+use dev\winterframework\stereotype\concurrent\Lockable;
+
+#[Lockable(name: 'order-#{id}')]
+public function updateOrderStatus(int $id): void
+{
+    // Only one process per $id can run this at a time on this node.
+}
+```
+
+  </Tab>
+  <Tab title="With Wait Timeout">
+
+```php OrderService.php
+use dev\winterframework\stereotype\concurrent\Lockable;
+
+// Wait up to 3 seconds for the lock; TTL of 30 seconds prevents deadlocks.
+#[Lockable(name: 'order-#{id}', waitMilliSecs: 3000, ttlSeconds: 30)]
+public function updateOrderStatus(int $id): void
+{
+    // Waits up to 3 s to acquire the lock, then throws LockException.
+}
+```
+
+  </Tab>
+</Tabs>
+
+<Tip>
+Always set a `ttlSeconds` value in production. Without it, a crashed process can hold the lock indefinitely and block all subsequent callers.
+</Tip>
+
+## Distributed Locking
+
+For deployments with multiple nodes you need a `LockManager` backed by a shared store so that locks are visible across the entire cluster. Provide a bean that implements `LockManager`, pass its bean name to the `lockManager` option, and the `#[Lockable]` attribute works identically to local locking from your code's perspective.
+
+Supported backends include Redis, database locks, Apache ZooKeeper, Consul, and anything else you can wrap in a `LockManager` implementation.
+
+<Steps>
+
+<Step title="Annotate the method with a named lockManager">
+
+```php OrderService.php
+use dev\winterframework\stereotype\concurrent\Lockable;
+
+#[Lockable(name: 'order-#{id}', lockManager: 'redisLockManager')]
+public function updateOrderStatus(int $id): void
+{
+    // No two processes across the cluster can run this for the same $id.
+}
+```
+
+</Step>
+
+<Step title="Register the LockManager bean">
+
+```php LockConfig.php
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\util\concurrent\LockManager;
+
+#[Configuration]
+class LockConfig
+{
+    #[Bean('redisLockManager')]
+    public function getRedisLockManager(): LockManager
+    {
+        // Construct and return your LockManager implementation.
+        // E.g. wrap a Symfony RedisStore inside an adapter.
+        return new MyRedisLockManager();
+    }
+}
+```
+
+</Step>
+
+</Steps>
+
+<Note>
+The Symfony Lock component supports Redis, Memcached, PDO/DBAL databases, ZooKeeper, Consul, and more — all of which can be adapted to the Winter Boot `LockManager` interface.
+</Note>
+
+## Handling LockException
+
+If the lock cannot be acquired within `waitMilliSecs` milliseconds, Winter Boot throws a `LockException`. Catch it in your controller or service layer and return an appropriate response to the caller.
+
+```php OrderController.php
+use dev\winterframework\util\concurrent\LockException;
+
+try {
+    $this->orderService->updateOrderStatus($id);
+} catch (LockException $e) {
+    // Lock could not be acquired — handle retry or conflict response
+    return $this->response->conflict('Order is currently being updated. Please retry.');
+}
+```
+
+<Accordion title="Common LockException scenarios">
+
+| Scenario | Recommended response |
+|---|---|
+| High-throughput writes to the same resource | Return HTTP 409 Conflict and ask the client to retry with exponential back-off. |
+| Background job overlap prevention | Log and skip the current execution; the next scheduled run will proceed normally. |
+| Deadlock prevention with `ttlSeconds` | The lock auto-releases after the TTL; the next caller acquires it cleanly. |
+
+</Accordion>

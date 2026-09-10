@@ -1,0 +1,271 @@
+SQL Migrations: Version-Tracked Database Script Runner - Winter Boot
+
+Data Access
+
+# SQL Migrations: Version-Tracked Database Script Runner
+
+Run versioned SQL migrations in Winter Boot with automatic tracking, multi-tenant support, native CLI mode, and Kubernetes init container integration.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+Winter Boot includes a standalone SQL migration tool that executes plain `.sql` files against your configured datasources and tracks each executed migration in a `winter_migrations` table. Version state is determined by the relative file path — if a path has already been recorded in the tracking table, the file is skipped on subsequent runs. This approach gives you repeatable, idempotent deploys without requiring any migration-specific DSL.
+
+---
+
+## Quick Start
+
+1. **Enable migrations in application.yml** — Add `migrations.enabled: true` to the datasource you want to migrate:
+
+```
+datasource:
+    -   name: defaultdb
+        isPrimary: true
+        url: "mysql:host=localhost;dbname=myapp"
+        username: myuser
+        password: mypassword
+        migrations:
+            enabled: true
+```
+
+2. **Create the migrations directory**:
+
+```
+mkdir -p /migrations/defaultdb
+```
+
+3. **Add a SQL migration file** — Create `/migrations/defaultdb/001-init-schema.sql`:
+
+```
+# Initial schema
+CREATE TABLE users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username  VARCHAR(100) NOT NULL UNIQUE,
+    email     VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add search index
+CREATE INDEX idx_users_email ON users(email);
+```
+
+4. **Run migrations**:
+
+```
+# PHP CLI
+php bin/migrate.php -c /path/to/config --sqlPath /path/to/migrations
+
+# PHAR (built with build/sqlmigrator/build.sh)
+./winter-migrations-app.phar -c /path/to/config --sqlPath /path/to/migrations
+```
+
+5. **Verify** — Check that the `winter_migrations` table was created and your migration is recorded:
+
+```
+SELECT migration_path, executed_at FROM winter_migrations;
+-- defaultdb/001-init-schema.sql  |  2026-09-01 11:14:49
+```
+
+---
+
+## Configuration
+
+### Standalone Datasource
+
+Enable migrations on any datasource by setting `migrations.enabled: true`:
+
+```
+datasource:
+    -   name: defaultdb
+        url: "mysql:host=localhost;dbname=myapp"
+        username: myuser
+        password: mypassword
+        migrations:
+            enabled: true
+
+    -   name: admindb
+        url: "pgsql:host=localhost;dbname=adminapp"
+        username: pguser
+        password: pgpassword
+        migrations:
+            enabled: true
+```
+
+### Multi-Tenant Datasource
+
+Migrations work with multi-tenant datasources too. The tool runs each SQL file against **every tenant** returned by `TenantDataSourceProvider::getAllTenantIds()`:
+
+```
+multitenant-datasource:
+    -   name: tenantdb
+        url: "mysql:host=localhost;port=3306"
+        providerClass: "App\\Config\\MyTenantDataSourceProvider"
+        migrations:
+            enabled: true
+```
+
+### Native CLI Mode (`useCli`)
+
+By default, the migration tool parses SQL files in PHP and executes each statement individually. For complex SQL files that contain transactions, PL/SQL or T-SQL blocks, stored procedures, triggers, or mixed DDL/DML, set `useCli: true` to hand the entire file to the database's native command-line client instead.
+
+```
+datasource:
+    -   name: defaultdb
+        url: "pgsql:host=localhost;dbname=myapp"
+        username: postgres
+        password: secretpassword
+        migrations:
+            enabled: true
+            useCli: true
+```
+
+When `useCli: true` is set, the framework selects the appropriate CLI tool based on the DSN scheme:
+
+DSN Scheme | CLI Tool
+---|---
+`pgsql` | `psql`
+`mysql` | `mysql`
+`sqlite` | `sqlite3`
+`oci` | `sqlplus`
+`sqlsrv` / `dblib` | `sqlcmd`
+
+---
+
+## Directory Structure
+
+Organise migration files under a root directory with one sub-folder per datasource name. Files are executed in **alphabetical order**; use numeric or date-based prefixes to enforce a deterministic sequence.
+
+```
+/migrations/
+├── defaultdb/                   # matches datasource name "defaultdb"
+│   ├── 001-init-schema.sql
+│   ├── 002-add-indexes.sql
+│   └── release-1.1/             # optional release sub-folders
+│       └── 003-add-audit-cols.sql
+├── admindb/                     # matches datasource name "admindb"
+│   └── 001-init-admin-schema.sql
+└── tenantdb/                    # matches multi-tenant datasource name "tenantdb"
+    ├── 001-tenant-schema.sql
+    └── 002-tenant-seed-data.sql
+```
+
+**Requirements:**
+
+-   Each top-level sub-folder must exactly match the datasource `name` in `application.yml`.
+-   SQL files must have the `.sql` extension.
+-   Sub-folders (for release-based organisation) are supported and scanned recursively.
+-   Execution order is alphabetical within each directory level.
+
+---
+
+## The `winter_migrations` Tracking Table
+
+The framework automatically creates a `winter_migrations` table the first time it runs against a datasource.
+
+```
+-- Generic / SQLite
+CREATE TABLE winter_migrations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    migration_path VARCHAR(512) NOT NULL UNIQUE,
+    executed_at    DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    executed_by    VARCHAR(100)
+);
+```
+
+Each successfully executed migration is recorded by its **relative path** from the migrations root (e.g. `defaultdb/001-init-schema.sql`). On subsequent runs the tool queries `COUNT(*) WHERE migration_path = ?`; any file that already has a row is skipped.
+
+---
+
+## SQL File Format
+
+Each file may contain one or more SQL statements. The parser supports `#` and `--` style line comments and ignores blank lines. Every statement must be terminated with a semicolon (`;`).
+
+```
+# Create the orders table
+CREATE TABLE orders (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer   VARCHAR(200) NOT NULL,
+    amount     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    status     VARCHAR(50)  NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add a composite index for reporting queries
+CREATE INDEX idx_orders_status_created
+    ON orders(status, created_at);
+```
+
+---
+
+## CLI Commands
+
+```
+php bin/migrate.php \
+  -c /path/to/config \
+  --sqlPath /path/to/migrations
+```
+
+Flag | Description
+---|---
+`-c` | Path to the directory containing `application.yml`
+`--sqlPath` | Root path of the migrations directory tree
+
+### Building the PHAR
+
+```
+cd build/sqlmigrator
+./build.sh
+# Output: build/sqlmigrator/target/winter-migrations-app.phar
+```
+
+---
+
+## Kubernetes Init Container
+
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-app
+spec:
+  initContainers:
+    - name: sql-migrations
+      image: my-app:latest
+      command: ["/winter-migrations-app.phar"]
+      args:
+        - "-c"
+        - "$(CONFIG_DIR)"
+        - "--sqlPath"
+        - "$(SQL_MIGRATION_PATH)"
+      env:
+        - name: SQL_MIGRATION_PATH
+          value: /migrations
+        - name: CONFIG_DIR
+          value: /app/config
+```
+
+---
+
+## Migration Execution Flow
+
+1. Read `application.yml` and collect all datasources with `migrations.enabled: true`.
+2. For each datasource, locate the SQL folder at `{sqlBasePath}/{datasource-name}/`.
+3. Recursively scan for `.sql` files; sort alphabetically.
+4. For multi-tenant datasources, retrieve all tenant IDs from `TenantDataSourceProvider::getAllTenantIds()`.
+5. For each file (and each tenant, if multi-tenant): query `winter_migrations` to check whether the file has already been executed.
+6. If not already recorded, execute the file (PHP parser mode or native CLI mode).
+7. Record a new row in `winter_migrations` on success.
+8. **Stop immediately on the first failure** — no automatic rollback is performed.
+
+---
+
+## Troubleshooting
+
+**"SQL folder not found" error** — The directory under `--sqlPath` does not contain a sub-folder that exactly matches the datasource `name`. Verify the folder structure: `{sqlPath}/{datasource-name}/` and confirm the datasource `name` value in `application.yml` exactly matches the folder name (case-sensitive on Linux).
+
+**Migration not executing (file silently skipped)** — Check `migrations.enabled: true` is present in `application.yml` for the target datasource. Verify the file has a `.sql` extension. Query the tracking table: `SELECT * FROM winter_migrations WHERE migration_path LIKE '%your-file%';`. If you need to re-run a migration, delete its row from `winter_migrations` (use with care in production).
+
+**Native CLI tool not found (useCli: true)** — Install the appropriate client package and confirm the binary is accessible: `which psql` (or `mysql`, `sqlite3`, etc.)
+
+**Migration fails mid-way** — Fix the failing SQL statement. Manually roll back or compensate any partial changes. Re-run the migration tool — already-successful files are skipped, so only the failed (and unrecorded) file will be re-attempted.

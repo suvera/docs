@@ -1,0 +1,348 @@
+---
+title: "Build REST Controllers with Winter Boot"
+sidebarTitle: "REST Controllers"
+description: "Turn PHP classes into HTTP handlers using #[RestController], inject dependencies with #[Autowired], and shape responses with the ResponseEntity builder API."
+---
+
+Winter Boot's `#[RestController]` attribute transforms an ordinary PHP class into a fully managed HTTP handler. The framework discovers annotated classes automatically through namespace scanning, wires their dependencies, routes incoming requests to the correct method, and serialises the return value into an HTTP response — all without any XML, YAML, or routing-file configuration.
+
+## Registering a Controller
+
+Apply `#[RestController]` at the class level to register the class as a REST endpoint handler. The class must be concrete (non-abstract), and its namespace must fall within one of the component-scan packages declared in your application configuration.
+
+```php UserController.php
+<?php
+
+namespace dev\winterboot\samples\controller;
+
+use dev\winterframework\stereotype\RestController;
+
+#[RestController]
+class UserController
+{
+    // handler methods go here
+}
+```
+
+<Tip>
+  `#[RestController]` accepts an optional `name` parameter — for example, `#[RestController(name: 'userController')]`. If you omit it, Winter Boot derives the bean name from the class name.
+</Tip>
+
+## Injecting Dependencies
+
+Inject services, repositories, and other beans into your controller with `#[Autowired]`. Winter Boot resolves and injects the dependency at startup, so there is no manual container look-up at runtime.
+
+```php UserController.php
+<?php
+
+namespace dev\winterboot\samples\controller;
+
+use dev\winterboot\samples\service\UserService;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\RestController;
+
+#[RestController]
+class UserController
+{
+    #[Autowired]
+    protected UserService $userService;
+
+    // $this->userService is fully initialised before any request arrives
+}
+```
+
+## Return Types
+
+Controller methods can return three types of value. Winter Boot inspects the return value and sets the appropriate `Content-Type` header automatically.
+
+| Return type | Behaviour |
+|---|---|
+| `array` | Serialised to JSON; `Content-Type: application/json` |
+| `ResponseEntity` | Full control over status code, headers, and body |
+| `string` | Sent as-is; `Content-Type: text/plain` |
+
+### ResponseEntity Builder API
+
+`ResponseEntity` (namespace `dev\winterframework\web\http\ResponseEntity`) provides static factory methods to start a response, followed by fluent builder calls to attach a body or headers.
+
+<Accordion title="ResponseEntity factory methods">
+
+| Method | Description |
+|---|---|
+| `ResponseEntity::ok()` | 200 OK |
+| `ResponseEntity::created(string $location)` | 201 Created, sets `Location` header |
+| `ResponseEntity::accepted()` | 202 Accepted |
+| `ResponseEntity::noContent()` | 204 No Content |
+| `ResponseEntity::badRequest()` | 400 Bad Request |
+| `ResponseEntity::unauthorized()` | 401 Unauthorized |
+| `ResponseEntity::notFound()` | 404 Not Found |
+| `ResponseEntity::unprocessableEntity()` | 422 Unprocessable Entity |
+| `ResponseEntity::status(HttpStatus $status)` | Any status from `HttpStatus` |
+
+</Accordion>
+
+<Accordion title="ResponseEntity builder methods">
+
+| Method | Description |
+|---|---|
+| `->withJson(mixed $body)` | Set body + `Content-Type: application/json` |
+| `->withXml(mixed $body)` | Set body + `Content-Type: application/xml` |
+| `->withHeader(string $name, string $value)` | Append a response header |
+| `->withStatusCode(int $code)` | Override status by numeric code |
+| `->setBody(mixed $body)` | Set body without changing Content-Type |
+
+</Accordion>
+
+```php
+use dev\winterframework\web\http\ResponseEntity;
+use dev\winterframework\web\http\HttpStatus;
+
+// 200 OK with a JSON body
+return ResponseEntity::ok()->withJson($user);
+
+// 404 Not Found with no body
+return ResponseEntity::notFound();
+
+// 201 Created pointing to the new resource
+return ResponseEntity::created('/users/42')->withJson($newUser);
+
+// Custom status code
+return ResponseEntity::status(HttpStatus::$CONFLICT)->withJson(['message' => 'Already exists']);
+```
+
+## Complete CRUD Example
+
+The controller below brings together every common pattern: `#[Autowired]` injection, all five HTTP method annotations, `#[PathVariable]`, `#[RequestBody]`, `#[RequestParam]`, and both `array` and `ResponseEntity` return types.
+
+```php UserController.php
+<?php
+
+namespace dev\winterboot\samples\doctrine\controller;
+
+use dev\winterboot\samples\doctrine\model\User;
+use dev\winterboot\samples\doctrine\service\UserService;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\stereotype\web\DeleteMapping;
+use dev\winterframework\stereotype\web\GetMapping;
+use dev\winterframework\stereotype\web\PostMapping;
+use dev\winterframework\stereotype\web\PutMapping;
+use dev\winterframework\stereotype\web\PathVariable;
+use dev\winterframework\stereotype\web\RequestBody;
+use dev\winterframework\stereotype\web\RequestParam;
+
+#[RestController]
+class UserController
+{
+    #[Autowired]
+    protected UserService $userService;
+
+    // GET /users — return all users as JSON
+    #[GetMapping(path: '/users')]
+    public function getAllUsers(): array
+    {
+        return [
+            'success' => true,
+            'data'    => $this->userService->findAll(),
+        ];
+    }
+
+    // GET /users/{id} — return a single user
+    #[GetMapping(path: '/users/{id}')]
+    public function getUserById(#[PathVariable] int $id): array
+    {
+        $user = $this->userService->findById($id);
+
+        if ($user) {
+            return ['success' => true, 'data' => $user];
+        }
+
+        return ['success' => false, 'message' => 'User not found'];
+    }
+
+    // POST /users — create a new user from a JSON body
+    #[PostMapping(path: '/users')]
+    public function createUser(#[RequestBody] User $user): array
+    {
+        try {
+            $existing = $this->userService->findByEmail($user->getEmail());
+            if ($existing) {
+                return [
+                    'success' => false,
+                    'message' => 'User with email ' . $user->getEmail() . ' already exists',
+                ];
+            }
+
+            $created = $this->userService->createUser($user);
+            return [
+                'success' => true,
+                'data'    => $created,
+                'message' => 'User created successfully',
+            ];
+        } catch (\Exception $e) {
+            return ['success' => false, 'message' => 'Failed to create user: ' . $e->getMessage()];
+        }
+    }
+
+    // PUT /users/{id} — replace an existing user
+    #[PutMapping(path: '/users/{id}')]
+    public function updateUser(#[PathVariable] int $id, #[RequestBody] User $user): array
+    {
+        try {
+            $existing = $this->userService->findById($id);
+            if (!$existing) {
+                return ['success' => false, 'message' => 'User not found'];
+            }
+
+            $user->setId($id);
+            $updated = $this->userService->updateUser($user);
+
+            return [
+                'success' => true,
+                'data'    => $updated,
+                'message' => 'User updated successfully',
+            ];
+        } catch (\Exception $e) {
+            return ['success' => false, 'message' => 'Failed to update user: ' . $e->getMessage()];
+        }
+    }
+
+    // DELETE /users/{id}
+    #[DeleteMapping(path: '/users/{id}')]
+    public function deleteUser(#[PathVariable] int $id): array
+    {
+        try {
+            $deleted = $this->userService->deleteUser($id);
+            if ($deleted) {
+                return ['success' => true, 'message' => 'User deleted successfully'];
+            }
+            return ['success' => false, 'message' => 'User not found'];
+        } catch (\Exception $e) {
+            return ['success' => false, 'message' => 'Failed to delete user: ' . $e->getMessage()];
+        }
+    }
+
+    // GET /users/search?email=...
+    #[GetMapping(path: '/users/search')]
+    public function searchByEmail(#[RequestParam] string $email): array
+    {
+        $user = $this->userService->findByEmail($email);
+
+        if ($user) {
+            return ['success' => true, 'data' => $user];
+        }
+
+        return ['success' => false, 'message' => 'User not found'];
+    }
+}
+```
+
+### Testing with curl
+
+<CodeGroup>
+
+```bash List all users
+curl http://localhost/users
+```
+
+```bash Get a single user
+curl http://localhost/users/1
+```
+
+```bash Create a user
+curl -X POST http://localhost/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"John Doe","email":"john@example.com"}'
+```
+
+```bash Update a user
+curl -X PUT http://localhost/users/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Jane Doe","email":"jane@example.com"}'
+```
+
+```bash Delete a user
+curl -X DELETE http://localhost/users/1
+```
+
+```bash Search by email
+curl "http://localhost/users/search?email=john@example.com"
+```
+
+</CodeGroup>
+
+## Error Handling
+
+When an unhandled error or exception occurs, Winter Boot delegates to an `ErrorController` implementation. The `ErrorController` interface lives in `dev\winterframework\core\web\error\ErrorController` and exposes a single method:
+
+```php
+interface ErrorController
+{
+    public function handleError(
+        HttpRequest    $request,
+        ResponseEntity $response,
+        HttpStatus     $status,
+        ?Throwable     $t = null
+    ): void;
+}
+```
+
+Register your implementation under the bean name `errorController` using either of the two approaches below.
+
+<Tabs>
+  <Tab title="@Component">
+
+    ```php MyErrorController.php
+    <?php
+
+    use dev\winterframework\core\web\error\ErrorController;
+    use dev\winterframework\stereotype\Component;
+    use dev\winterframework\web\http\HttpRequest;
+    use dev\winterframework\web\http\HttpStatus;
+    use dev\winterframework\web\http\ResponseEntity;
+
+    #[Component('errorController')]
+    class MyErrorController implements ErrorController
+    {
+        public function handleError(
+            HttpRequest    $request,
+            ResponseEntity $response,
+            HttpStatus     $status,
+            ?Throwable     $t = null
+        ): void {
+            $response->withStatusCode($status->getValue())
+                     ->withJson([
+                         'error'   => $status->getReasonPhrase(),
+                         'message' => $t?->getMessage(),
+                     ]);
+        }
+    }
+    ```
+
+  </Tab>
+  <Tab title="@Bean">
+
+    ```php AppConfig.php
+    <?php
+
+    use dev\winterframework\core\web\error\ErrorController;
+    use dev\winterframework\stereotype\Bean;
+    use dev\winterframework\stereotype\Configuration;
+
+    #[Configuration]
+    class AppConfig
+    {
+        #[Bean('errorController')]
+        public function getErrorController(): ErrorController
+        {
+            return new MyErrorController();
+        }
+    }
+    ```
+
+  </Tab>
+</Tabs>
+
+<Warning>
+  Only one `errorController` bean may exist in the application context. If you register two, Winter Boot throws a duplicate-bean exception at startup.
+</Warning>

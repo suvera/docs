@@ -1,0 +1,293 @@
+---
+title: "Build and Deploy Your Winter Boot Application"
+sidebarTitle: "Build & Deploy"
+description: "Package Winter Boot apps as Phar archives or Docker images, configure the right application runner, and manage processes with init.d, systemd, or Kubernetes."
+---
+
+Winter Boot applications can be shipped in several ways depending on your infrastructure: as a self-contained Phar archive for bare-metal hosts, as a Docker image for containerised deployments, or via standard PHP-FPM for environments that already manage PHP processes. The framework ships with a sample init.d script and Docker base image to get you started quickly. A fully working example — including a `Dockerfile`, `build.xml`, and `docker-compose.yml` — is available in the `suvera/winter-example-service` repository.
+
+## Choose an Application Runner
+
+Before building, choose the runner that matches your deployment target. Each runner starts the application in a different mode.
+
+<CardGroup cols={3}>
+  <Card title="WinterWebSwooleApplication" icon="bolt">
+    **Recommended for production.** Starts a Swoole HTTP server with multiple worker processes. Supports `#[Async]`, `#[Scheduled]`, daemon threads, and the local KV/Queue stores. Requires the `swoole` PHP extension.
+  </Card>
+  <Card title="WinterWebApplication" icon="server">
+    Traditional PHP-FPM / CGI runner. Each request is a new process invocation — no persistent workers. Use this when Swoole is unavailable or when integrating with an existing PHP-FPM pool.
+  </Card>
+  <Card title="WinterCliApplication" icon="terminal">
+    Command-line runner. Boots the application context and fires the `ApplicationReady` event, then exits. Useful for batch jobs, migrations, and one-off administrative scripts.
+  </Card>
+</CardGroup>
+
+```php bin/app.php
+// Swoole HTTP server (recommended for production)
+(new WinterWebSwooleApplication())->run(MyApplication::class);
+
+// PHP-FPM / traditional
+(new WinterWebApplication())->run(MyApplication::class);
+
+// CLI / batch
+(new WinterCliApplication())->run(MyApplication::class);
+```
+
+<Warning>
+  `WinterWebApplication` (PHP-FPM) does not support `#[Async]`, `#[Scheduled]`, daemon threads, or the local KV/Queue stores. These features require `WinterWebSwooleApplication`.
+</Warning>
+
+---
+
+## Build Process
+
+Use [Box](https://github.com/box-project/box) to compile your application and all its Composer dependencies into a single, self-contained Phar archive.
+
+<Steps>
+
+### Install dependencies
+
+```bash
+composer install --no-dev --optimize-autoloader
+```
+
+### Install Box
+
+```bash
+composer global require humbug/box
+```
+
+Verify the installation:
+
+```bash
+box --version
+```
+
+### Create `box.json`
+
+Add a `box.json` configuration file to your project root:
+
+```json box.json
+{
+    "output": "target/my-app.phar",
+    "main": "bin/app.php",
+    "directories": ["src", "config"],
+    "compression": "GZ",
+    "chmod": "0755"
+}
+```
+
+### Compile the Phar
+
+```bash
+box compile
+```
+
+On success, the output file is a standalone executable:
+
+```bash
+php target/my-app.phar -c /etc/my-app/config
+```
+
+</Steps>
+
+---
+
+## Deployment
+
+### Docker Deployment
+
+Winter Boot ships a base `Dockerfile` at `build/docker/Dockerfile` that extends the official `php:8.5-cli` image and pre-installs the extensions most modules require:
+
+```dockerfile build/docker/Dockerfile
+#####################################################################################
+#  WinterBoot PHP Image - Run below command
+#
+#     docker build . -t suvera/winter-boot:latest -f ./build/docker/Dockerfile
+#
+#####################################################################################
+FROM php:8.5-cli
+
+RUN apt-get update \
+    && apt-get install -y librdkafka-dev libzip-dev procps libssl-dev libcurl4-openssl-dev \
+    && pecl install redis \
+    && pecl install rdkafka \
+    && pecl install swoole-6.2.2 \
+    && pecl install zip \
+    && docker-php-ext-enable redis rdkafka swoole zip
+```
+
+Build your application image on top of the base image:
+
+```dockerfile Dockerfile
+FROM suvera/winter-boot:latest
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --optimize-autoloader
+
+COPY src/    src/
+COPY config/ config/
+
+EXPOSE 8080
+
+CMD ["php", "src/MyApplication.php", "-c", "config/"]
+```
+
+<CodeGroup>
+
+```bash Build
+docker build -t my-winter-service:latest .
+```
+
+```bash Run
+docker run -p 8080:8080 my-winter-service:latest
+```
+
+</CodeGroup>
+
+#### Key Considerations
+
+<AccordionGroup>
+  <Accordion title="PHP 8.4+ required">
+    Winter Boot requires PHP 8.4 or higher. The base image ships PHP 8.5-cli.
+  </Accordion>
+  <Accordion title="Swoole extension">
+    Install via `pecl install swoole` for the `WinterWebSwooleApplication` runner. The base image already includes it.
+  </Accordion>
+  <Accordion title="Composer install at build time">
+    Run `composer install --no-dev --optimize-autoloader` during the `docker build` step, not at container start. Installing at start adds latency to every container launch.
+  </Accordion>
+  <Accordion title="Config directory at runtime">
+    Mount your `application.yml` at a known path and pass it with `-c /config` at container start. Avoid baking environment-specific config into the image layer.
+  </Accordion>
+</AccordionGroup>
+
+#### Kubernetes — Init Container for Migrations
+
+When deploying with SQL migrations, run the migrator as a Kubernetes init container so the schema is up-to-date before any application pod starts:
+
+```yaml k8s/deployment.yaml
+initContainers:
+  - name: db-migrate
+    image: my-winter-service:latest
+    command: ["php", "target/winter-migrations-app.phar", "-c", "/config"]
+    volumeMounts:
+      - name: config
+        mountPath: /config
+```
+
+---
+
+### Bare-Metal / VM Deployment
+
+For traditional host-based deployments, build a Phar archive and manage the process with the provided init.d sample script.
+
+Start the application with an explicit config directory:
+
+```bash
+php target/my-app.phar -c /etc/my-app/config/
+```
+
+The `-c` flag points to the directory containing your `application.yml` (and any additional config files such as `logger.yml`).
+
+#### init.d Service Management
+
+Winter Boot ships a ready-to-use init.d template at `build/init.d.sample.sh`. Copy it and register it with your init system:
+
+```bash
+cp build/init.d.sample.sh /etc/init.d/my-winter-service
+chmod +x /etc/init.d/my-winter-service
+```
+
+Edit the variables at the top of the file to match your environment:
+
+```bash /etc/init.d/my-winter-service
+USER=www-data
+SERVICE_NAME=my-winter-service
+SERVICE="target/my-app.phar"
+CONFIG_DIR="/etc/my-app/config"
+ADMIN_PORT="9090"
+ADMIN_TOKEN_FILE="/etc/my-app/admin.token"
+LOG_FILE="/var/log/my-winter-service/app.log"
+PID_FILE="/var/run/my-winter-service.pid"
+PHP_BINARY="php"
+```
+
+Then control the service with standard commands:
+
+```bash
+service my-winter-service start
+service my-winter-service stop
+service my-winter-service restart
+service my-winter-service status
+```
+
+#### systemd Service Management
+
+To use systemd instead, create a native unit file:
+
+```ini /etc/systemd/system/my-winter-service.service
+[Unit]
+Description=My Winter Boot Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+ExecStart=/usr/bin/php /var/www/my-app/target/my-app.phar -c /etc/my-app/config
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Reload systemd and enable the service:
+
+```bash
+systemctl daemon-reload
+systemctl enable my-winter-service
+systemctl start  my-winter-service
+```
+
+---
+
+### PHP-FPM Deployment
+
+When using `WinterWebApplication` (without Swoole), point your web server's FastCGI configuration at your application entry point:
+
+```nginx /etc/nginx/sites-available/my-app.conf
+location / {
+    fastcgi_pass  unix:/run/php/php8.4-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME /var/www/my-app/bin/app.php;
+    include       fastcgi_params;
+}
+```
+
+<Warning>
+  `WinterWebApplication` (PHP-FPM) does not support `#[Async]`, `#[Scheduled]`, daemon threads, or the local KV/Queue stores. Switch to `WinterWebSwooleApplication` if you need any of these features.
+</Warning>
+
+---
+
+## Full Example Project
+
+The `suvera/winter-example-service` repository demonstrates a complete Winter Boot microservice with a production-ready setup:
+
+<CardGroup cols={2}>
+  <Card title="Dockerfile" icon="docker">
+    A production-ready multi-stage `Dockerfile` built on the Winter Boot base image.
+  </Card>
+  <Card title="Ant build.xml" icon="hammer">
+    An Ant `build.xml` for Phar packaging, suitable for CI/CD pipelines.
+  </Card>
+  <Card title="docker-compose.yml" icon="layer-group">
+    A `docker-compose.yml` for local development with all dependencies wired up.
+  </Card>
+  <Card title="Migration init container" icon="database">
+    SQL migration setup using the Kubernetes init container pattern.
+  </Card>
+</CardGroup>

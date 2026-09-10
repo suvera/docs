@@ -1,0 +1,344 @@
+Dependency Injection in Winter Boot PHP 8 Framework - Winter Boot
+
+Core Concepts
+
+# Dependency Injection in Winter Boot PHP 8 Framework
+
+Learn how Winter Boot's DI container manages beans, wires dependencies, and provides programmatic access to the application context using attributes.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+Winter Boot uses a pure attribute-driven IoC container. Every class you annotate with a stereotype (`#[Service]`, `#[Component]`, `#[Configuration]`) is discovered during namespace scanning at startup, instantiated once as a singleton, and registered in the bean registry. Dependencies between beans are expressed with `#[Autowired]` on class properties — the container resolves and injects them automatically so you never call `new` on a managed object. All stereotype attributes live in the `dev\winterframework\stereotype\` namespace.
+
+---
+
+## `#[Service]`
+
+`#[Service]` marks a concrete class as a **service layer** component. It is a class-level attribute that cannot be placed on abstract classes.
+
+Unnamed service:
+
+```
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class PaymentService {
+    public function charge(int $amount): void {
+        // ...
+    }
+}
+
+// Retrieve by concrete class
+$svc = $appCtx->beanByClass(PaymentService::class);
+```
+
+Named service:
+
+```
+use dev\winterframework\stereotype\Service;
+
+#[Service("paypal")]
+class PayPalPaymentService {
+    public function charge(int $amount): void {
+        // ...
+    }
+}
+
+// Retrieve by the registered name
+$svc = $appCtx->beanByName("paypal");
+```
+
+Two beans cannot share the same name. A name collision at startup throws an exception before any request is served.
+
+### `Impl` suffix — automatic interface aliasing
+
+When a class whose name ends with the **exact suffix `Impl`** (case-sensitive) is registered, the container also registers it under every interface it implements. This lets you depend on an interface type without knowing the concrete class.
+
+```
+interface UserRepository {
+    public function findById(int $id): ?User;
+}
+
+#[Service]
+class UserRepositoryImpl implements UserRepository {
+    public function findById(int $id): ?User {
+        // ...
+    }
+}
+
+// Both lookups resolve to the same UserRepositoryImpl instance
+$a = $appCtx->beanByClass(UserRepositoryImpl::class); // concrete class
+$b = $appCtx->beanByClass(UserRepository::class);     // interface alias ✓
+```
+
+Without the `Impl` suffix the interface alias is **not** created:
+
+```
+#[Service]
+class Car implements Vehicle {}
+
+$car     = $appCtx->beanByClass(Car::class);     // works ✓
+$vehicle = $appCtx->beanByClass(Vehicle::class); // fails — no alias registered ✗
+```
+
+If **multiple** `*Impl` classes implement the same interface, calling `beanByClass(Interface::class)` throws `NoUniqueBeanDefinitionException`. Disambiguate with `beanByName("beanName")`, `beanByNameClass("beanName", Interface::class)`, `#[Autowired("beanName")]`, or `#[Qualifier]` at the injection point.
+
+---
+
+## `#[Component]`
+
+`#[Component]` is semantically identical to `#[Service]` — the container treats both the same way — but is conventionally used for infrastructure, utility, or cross-cutting classes that don't belong to a specific service layer.
+
+```
+use dev\winterframework\stereotype\Component;
+
+#[Component]
+class EmailValidator {
+    public function isValid(string $email): bool {
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+    }
+}
+```
+
+Named component:
+
+```
+use dev\winterframework\stereotype\Component;
+
+#[Component("slackNotifier")]
+class SlackNotifier {
+    public function send(string $message): void {
+        // ...
+    }
+}
+
+$notifier = $appCtx->beanByName("slackNotifier");
+```
+
+The same `Impl`-suffix aliasing rule applies to `#[Component]` beans.
+
+---
+
+## `#[Configuration]` + `#[Bean]`
+
+`#[Configuration]` marks a class as a **factory configuration** class. Methods inside it annotated with `#[Bean]` act as factory methods: the container calls them once, caches the returned object, and registers it as a managed bean. `#[Bean]` is a **method-level** attribute. The method must:
+
+-   belong to a `#[Configuration]` class
+-   declare a return type (no union types, no built-in types)
+-   not be a constructor or destructor
+
+Unnamed bean:
+
+```
+use dev\winterframework\stereotype\{Configuration, Bean};
+
+#[Configuration]
+class InfrastructureConfig {
+
+    #[Bean]
+    public function redisClient(): RedisClient {
+        $client = new RedisClient();
+        $client->connect('127.0.0.1', 6379);
+        return $client;
+    }
+}
+
+$redis = $appCtx->beanByClass(RedisClient::class);
+```
+
+Named beans:
+
+```
+use dev\winterframework\stereotype\{Configuration, Bean};
+
+#[Configuration]
+class DataSourceConfig {
+
+    #[Bean("primaryDb")]
+    public function primaryDataSource(): DataSource {
+        return new MysqlDataSource('primary.db.host', 'app_db');
+    }
+
+    #[Bean("analyticsDb")]
+    public function analyticsDataSource(): DataSource {
+        return new MysqlDataSource('analytics.db.host', 'analytics_db');
+    }
+}
+
+$primary   = $appCtx->beanByName("primaryDb");
+$analytics = $appCtx->beanByName("analyticsDb");
+```
+
+Init / destroy lifecycle:
+
+```
+#[Configuration]
+class CacheConfig {
+
+    #[Bean(initMethod: "connect", destroyMethod: "disconnect")]
+    public function cachePool(): CachePool {
+        return new RedisCachePool('127.0.0.1', 6379);
+    }
+}
+```
+
+The `initMethod` is called right after the bean is constructed; `destroyMethod` is registered with `ShutDownRegistry` and called when the process exits.
+
+`#[Bean]` factory methods are **not** subject to the `Impl`-suffix aliasing rule. They are registered only under their declared return type.
+
+---
+
+## `#[Autowired]`
+
+`#[Autowired]` is a **property-level** attribute. When the container instantiates a bean it inspects every property tagged with `#[Autowired]` and resolves them from the bean registry. The property must have a declared, non-union, non-built-in type. Both object types and interfaces (when aliased via `Impl`) can be autowired.
+
+```
+use dev\winterframework\stereotype\{Service, Autowired};
+
+#[Service]
+class OrderService {
+
+    #[Autowired]
+    private PaymentService $payment;
+
+    #[Autowired]
+    private UserRepository $users; // interface — works if UserRepositoryImpl exists
+
+    public function placeOrder(int $userId, int $amount): void {
+        $user = $this->users->findById($userId);
+        $this->payment->charge($amount);
+    }
+}
+```
+
+To inject a **named** bean rather than resolving by type, pass the name as the first argument:
+
+```
+#[Autowired("stripe")]
+private PaymentGateway $gateway;
+```
+
+---
+
+## `#[Qualifier]`
+
+`#[Qualifier]` is a **parameter-level** attribute used to disambiguate when multiple beans of the same type exist. It is applied to method or constructor parameters in scenarios where `#[Autowired]` alone cannot pick the right bean.
+
+```
+use dev\winterframework\stereotype\{Service, Qualifier};
+
+#[Service]
+class NotificationDispatcher {
+
+    public function __construct(
+        #[Qualifier("slackNotifier")] private Notifier $slack,
+        #[Qualifier("emailNotifier")] private Notifier $email
+    ) {}
+
+    public function dispatch(string $message): void {
+        $this->slack->send($message);
+        $this->email->send($message);
+    }
+}
+```
+
+---
+
+## `#[Value]`
+
+`#[Value]` is a **property-level** attribute that injects a scalar value from `application.yml`. The expression must use the `${key.path}` syntax — otherwise startup throws a `TypeError`. The property must be typed with a scalar built-in type (`string`, `int`, `float`, `bool`). An optional default value can be passed as the second argument.
+
+```
+use dev\winterframework\stereotype\{Configuration, Value};
+
+#[Configuration]
+class AppConfigProperties {
+
+    #[Value('${myApp.db.host}')]
+    private string $dbHost;
+
+    #[Value('${myApp.db.port}')]
+    private int $dbPort;
+
+    #[Value('${myApp.db.user}')]
+    private string $dbUser;
+
+    #[Value('${myApp.feature.enabled}', false)]
+    private bool $featureEnabled;
+}
+```
+
+Corresponding `application.yml`:
+
+```
+myApp:
+  db:
+    host: "db.example.com"
+    port: 3306
+    user: "app_user"
+  feature:
+    enabled: true
+```
+
+---
+
+## ApplicationContext — programmatic bean lookup
+
+`ApplicationContext` is itself injectable via `#[Autowired]` in any bean. It gives full programmatic access to the container and the configuration properties.
+
+```
+use dev\winterframework\stereotype\Component;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\core\context\ApplicationContext;
+
+#[Component]
+class DynamicServiceLocator {
+
+    #[Autowired]
+    private ApplicationContext $appCtx;
+
+    public function resolve(string $serviceName): object {
+        return $this->appCtx->beanByName($serviceName);
+    }
+}
+```
+
+### Bean lookup methods
+
+Method | Description
+---|---
+`beanByClass(string $class): mixed` | Retrieve a bean by its fully-qualified class or interface name
+`beanByName(string $name): mixed` | Retrieve a named bean
+`beanByNameClass(string $name, string $class): mixed` | Retrieve a named bean and cast-check against a class/interface
+`hasBeanByClass(string $class): bool` | Check if a bean exists for the given class
+`hasBeanByName(string $name): bool` | Check if a named bean is registered
+
+### Property access methods
+
+Method | Returns | Description
+---|---|---
+`getProperty(string $name, mixed $default = null)` | `mixed` | Generic property read
+`getPropertyStr(string $name, ?string $default = null)` | `string` | Property as string
+`getPropertyBool(string $name, ?bool $default = null)` | `bool` | Property as boolean
+`getPropertyInt(string $name, ?int $default = null)` | `int` | Property as integer
+`getPropertyFloat(string $name, ?float $default = null)` | `float` | Property as float
+`getProperties()` | `array` | All loaded properties
+`setProperty(string $name, mixed $value)` | `mixed` | Overwrite a property at runtime
+
+```
+$host    = $this->appCtx->getPropertyStr('myApp.db.host', 'localhost');
+$port    = $this->appCtx->getPropertyInt('myApp.db.port', 3306);
+$enabled = $this->appCtx->getPropertyBool('myApp.feature.enabled', false);
+$all     = $this->appCtx->getProperties();
+```
+
+### Metadata methods
+
+```
+$id      = $this->appCtx->getId();
+$name    = $this->appCtx->getApplicationName();
+$version = $this->appCtx->getApplicationVersion();
+$started = $this->appCtx->getStartupDate(); // Unix timestamp
+```

@@ -1,0 +1,333 @@
+---
+title: "Application Lifecycle and Context Management"
+sidebarTitle: "App Lifecycle"
+description: "Understand how Winter Boot scans namespaces, builds the bean graph, fires lifecycle hooks, and shuts down — and how to choose the right runner for your deployment."
+---
+
+Every Winter Boot application begins with a single annotated class and a call to a runner. From that moment the framework scans your code, builds a complete bean graph, calls lifecycle hooks, and hands control to the runtime — whether that is a Swoole HTTP server, plain PHP-FPM, a CLI tool, or a migration runner. Knowing exactly what happens at each stage helps you write correct startup code and understand why the order of `#[PostConstruct]` and `#[OnApplicationReady]` matters.
+
+## Startup sequence
+
+The container follows a fixed, deterministic sequence every time your application boots.
+
+<Steps>
+
+### Bootstrap the runner
+
+Instantiate a runner class (e.g. `WinterWebSwooleApplication`) and call `run(MyApplication::class)`. The runner reads the `#[WinterBootApplication]` attribute to learn which config directories and namespaces to use.
+
+### Load configuration
+
+The runner locates and parses every `application.yml` (and profile-specific variants) in the configured `configDirectory` paths. The merged result is available through `ApplicationContext::getProperty*()` before any bean is created.
+
+### Scan namespaces
+
+The runner walks the PSR-4 namespaces listed in `scanNamespaces`, skipping any prefixes in `scanExcludeNamespaces`. Every class carrying a known stereotype attribute is recorded as a `ClassResource` in the registry. If `autoload` is `true`, classes that have not been loaded by Composer yet are loaded on demand during this scan.
+
+### Build the application context
+
+The `WinterApplicationContext` is constructed from the scanned resources. If `eager` is `true`, every bean is instantiated immediately; otherwise beans are instantiated lazily on first access.
+
+### Wire dependencies
+
+For each instantiated bean the container resolves all `#[Autowired]` properties and `#[Value]` properties, injecting the correct objects and scalar values.
+
+### Call `#[PostConstruct]` methods
+
+After a bean is fully constructed and its dependencies are injected, any public non-abstract method annotated with `#[PostConstruct]` is called. Use this hook for validation, connection setup, or derived-field initialisation that depends on injected values.
+
+### Load modules
+
+Modules listed in `application.yml` under the `modules` key are initialised. Each module can contribute its own beans and namespaces to the context.
+
+### Fire `#[OnApplicationReady]`
+
+Every bean whose class is annotated with `#[OnApplicationReady]` has its `onApplicationReady()` method called. This is the correct place for work that must happen after the entire context is ready — seeding data, starting background threads, registering routes, or opening connections.
+
+### Start serving
+
+The runner hands off to the underlying runtime — starting the Swoole HTTP server, dispatching a single PHP-FPM request, executing CLI logic, or running migrations.
+
+</Steps>
+
+---
+
+## `#[WinterBootApplication]`
+
+The entry-point class must be annotated with `#[WinterBootApplication]`. This attribute is the single source of truth for all startup configuration.
+
+```php MyApplication.php
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterWebSwooleApplication;
+
+#[WinterBootApplication(
+    // Directories searched for application.yml and logger.yml
+    configDirectory: [__DIR__ . '/../config'],
+
+    // PSR-4 namespaces to scan: [prefix, base-directory] pairs
+    scanNamespaces: [
+        ['App\\', __DIR__ . '/../src'],
+    ],
+
+    // Autoload classes not yet loaded by Composer during namespace scan
+    autoload: false,
+
+    // Namespace prefixes excluded from scanning (e.g. test namespaces in prod)
+    scanExcludeNamespaces: ['App\\Tests\\'],
+
+    // Active profile — selects application-{profile}.yml overrides
+    profile: null,
+
+    // Eagerly instantiate all beans at startup (slower start, faster first request)
+    eager: false
+)]
+class MyApplication {
+
+    public static function main(): void {
+        (new WinterWebSwooleApplication())->run(MyApplication::class);
+    }
+}
+```
+
+### Option reference
+
+<ParamField path="configDirectory" type="array" required>
+  List of directory paths to search for `application.yml` and `logger.yml`.
+</ParamField>
+
+<ParamField path="scanNamespaces" type="array" required>
+  PSR-4 `[prefix, directory]` pairs to scan for stereotype attributes.
+</ParamField>
+
+<ParamField path="autoload" type="bool" default="false">
+  Load classes from disk if not already in memory during scanning.
+</ParamField>
+
+<ParamField path="scanExcludeNamespaces" type="array" default="[]">
+  Namespace prefixes to skip entirely during scanning.
+</ParamField>
+
+<ParamField path="profile" type="string | null" default="null">
+  Active environment profile. Loads `application-{profile}.yml` overrides on
+  top of the base configuration.
+</ParamField>
+
+<ParamField path="eager" type="bool" default="false">
+  Instantiate all beans at startup instead of lazily on first access. Results
+  in a slower startup but a faster first request.
+</ParamField>
+
+---
+
+## Application runner types
+
+Choose the runner class that matches how your application is deployed.
+
+<CardGroup cols={2}>
+
+<Card title="WinterWebSwooleApplication" icon="bolt">
+  **High-performance HTTP server** powered by OpenSwoole. Starts a persistent
+  multi-worker server that handles concurrent requests in a single PHP process.
+  The right choice for production APIs and microservices.
+
+  ```php
+  (new WinterWebSwooleApplication())->run(MyApplication::class);
+  ```
+</Card>
+
+<Card title="WinterWebApplication" icon="globe">
+  **Traditional PHP-FPM / Apache web runner.** Bootstraps the full context once
+  per request under a conventional web server. Use when Swoole is unavailable
+  or when integrating with an existing PHP hosting environment.
+
+  ```php
+  (new WinterWebApplication())->run(MyApplication::class);
+  ```
+</Card>
+
+<Card title="WinterCliApplication" icon="terminal">
+  **Command-line runner.** Boots the full DI context, fires
+  `#[OnApplicationReady]`, then returns control so your CLI logic can execute.
+  Ideal for console commands, one-off scripts, and integration test harnesses.
+
+  ```php
+  (new WinterCliApplication())->run(CliApplication::class);
+  ```
+</Card>
+
+<Card title="WinterMigrationApplication" icon="database">
+  **Database migration runner.** Accepts `--configDir`, `--sqlPath`, and
+  `--migrationType` CLI flags. Intentionally skips module loading and
+  `#[OnApplicationReady]` events for a lean, fast migration run.
+
+  ```bash
+  php migrate.php --configDir=config --sqlPath=db/migrations
+  ```
+</Card>
+
+</CardGroup>
+
+---
+
+## Multiple starters
+
+A single codebase can expose several starter classes, each bootstrapping a different slice of the application. This is a first-class pattern in Winter Boot — ideal for separating test, web, and worker entry points.
+
+```php Multiple starters
+// src/TestApplication.php
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/../config/test'],
+    scanNamespaces: [['App\\', __DIR__]],
+    scanExcludeNamespaces: ['App\\Web\\']
+)]
+class TestApplication {
+    public static function main(): void {
+        (new WinterCliApplication())->run(TestApplication::class);
+    }
+}
+
+// src/WebApplication.php
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/../config'],
+    scanNamespaces: [['App\\', __DIR__]],
+    eager: false
+)]
+class WebApplication {
+    public static function main(): void {
+        (new WinterWebSwooleApplication())->run(WebApplication::class);
+    }
+}
+```
+
+---
+
+## `#[PostConstruct]`
+
+`#[PostConstruct]` is a **method-level** attribute. The container calls the annotated method immediately after the bean is instantiated and all `#[Autowired]` and `#[Value]` injections have been applied.
+
+The framework enforces these rules at startup:
+
+- The method must be `public`.
+- The method must not be abstract or a constructor.
+- The method must not declare a return type (it should return `void`).
+
+```php DatabaseConnectionPool.php
+use dev\winterframework\stereotype\{Service, Autowired, PostConstruct};
+
+#[Service]
+class DatabaseConnectionPool {
+
+    #[Autowired]
+    private ApplicationContext $appCtx;
+
+    #[Value('${db.poolSize}')]
+    private int $poolSize;
+
+    private array $connections = [];
+
+    #[PostConstruct]
+    public function init(): void {
+        // $this->poolSize and $this->appCtx are already injected here
+        for ($i = 0; $i < $this->poolSize; $i++) {
+            $this->connections[] = $this->openConnection();
+        }
+    }
+
+    private function openConnection(): Connection {
+        $host = $this->appCtx->getPropertyStr('db.host');
+        return new Connection($host);
+    }
+}
+```
+
+<Warning>
+  Do **not** put initialisation logic that relies on injected values inside
+  `__construct`. Injections happen after construction, so `#[Autowired]` and
+  `#[Value]` properties are still `null` inside the constructor. Use
+  `#[PostConstruct]` instead.
+</Warning>
+
+---
+
+## `#[OnApplicationReady]`
+
+`#[OnApplicationReady]` is a **class-level** attribute. The framework calls `onApplicationReady()` on every annotated bean after the entire application context has been built, modules have been loaded, and the container is fully operational.
+
+The framework enforces these requirements at startup:
+
+- The class must also carry `#[Component]`, `#[Service]`, or `#[Configuration]`.
+- The class must implement the `ApplicationReadyEvent` interface (which declares `onApplicationReady(): void`).
+
+```php AppStartupTasks.php
+use dev\winterframework\stereotype\{Component, OnApplicationReady};
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\core\app\ApplicationReadyEvent;
+
+#[Component]
+#[OnApplicationReady]
+class AppStartupTasks implements ApplicationReadyEvent {
+
+    #[Autowired]
+    private CacheWarmupService $cacheWarmup;
+
+    #[Autowired]
+    private FeatureFlagService $featureFlags;
+
+    public function onApplicationReady(): void {
+        // Every bean is available — safe to call other services
+        $this->featureFlags->loadFromDatabase();
+        $this->cacheWarmup->primeProductCatalog();
+    }
+}
+```
+
+<Info>
+  `#[OnApplicationReady]` fires **once per application boot**, not once per
+  request. In the Swoole runner it fires in the master process before the HTTP
+  server starts accepting connections.
+</Info>
+
+---
+
+## Shutdown hooks — ShutDownRegistry
+
+`ShutDownRegistry` is an internal framework class that wraps PHP's `register_shutdown_function`. When `#[Bean]` methods declare a `destroyMethod`, the container automatically registers that method with `ShutDownRegistry`. On process exit, all registered destroy methods are called in registration order.
+
+<CodeGroup>
+
+```php ResourceConfig.php
+use dev\winterframework\stereotype\{Configuration, Bean};
+
+#[Configuration]
+class ResourceConfig {
+
+    #[Bean(initMethod: "open", destroyMethod: "close")]
+    public function connectionPool(): ConnectionPool {
+        return new ConnectionPool(maxSize: 10);
+    }
+}
+```
+
+```php ConnectionPool.php
+class ConnectionPool {
+
+    public function open(): void {
+        // Called right after the bean is created
+    }
+
+    public function close(): void {
+        // Called automatically on process shutdown
+        foreach ($this->connections as $conn) {
+            $conn->disconnect();
+        }
+    }
+}
+```
+
+</CodeGroup>
+
+<Note>
+  Destroy methods must be `public` and accept no required parameters. The
+  framework discovers them via reflection at startup and validates both
+  constraints before the application begins serving.
+</Note>

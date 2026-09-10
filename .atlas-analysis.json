@@ -1,12 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
+  "projectType": "framework",
+  "projectName": "Winter Boot",
+  "projectDescription": "A modern PHP microservices framework inspired by Spring Boot, using PHP 8 attributes for dependency injection, AOP, REST routing, async tasks, and more.",
   "theme": "luma",
-  "name": "Winter Boot",
-  "colors": {
-    "primary": "#1be39b",
-    "light": "#0c8c5c"
-  },
-  "favicon": "https://media.brand.dev/9f521b30-58a3-4c7a-8fcb-19818851894c.png",
+  "primaryColor": "#1be39b",
+  "lightColor": "#0c8c5c",
+  "darkColor": null,
   "navigation": {
     "tabs": [
       {
@@ -75,21 +74,34 @@
       }
     ]
   },
-  "navbar": {
-    "links": [
-      {
-        "label": "GitHub",
-        "href": "https://github.com/suvera/winter-boot"
-      }
-    ],
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/suvera/winter-boot"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/suvera/winter-boot"
-    }
-  }
+  "keyFeatures": [
+    "PHP 8 attribute-driven dependency injection with #[Service], #[Autowired], #[Bean]",
+    "Aspect-oriented programming for cross-cutting concerns (caching, transactions, retries)",
+    "REST API routing via Swoole HTTP server with #[RestController] and #[RequestMapping]",
+    "Async background tasks with #[Async] and cron-style scheduling with #[Scheduled]",
+    "Declarative transaction management with #[Transactional]",
+    "Built-in Prometheus metrics via Actuator",
+    "Extensible module system (Redis, Kafka, Doctrine ORM, SQS, S3, OpenSearch, Consul, Eureka)",
+    "Spring Boot-compatible programming model for teams migrating from Java"
+  ],
+  "publicApiSurface": [
+    "#[WinterBootApplication]",
+    "#[Service]",
+    "#[Component]",
+    "#[Autowired]",
+    "#[Qualifier]",
+    "#[Bean]",
+    "#[Value]",
+    "#[Configuration]",
+    "#[RestController]",
+    "#[RequestMapping]",
+    "#[GetMapping]",
+    "#[PostMapping]",
+    "#[Transactional]",
+    "#[Async]",
+    "#[Scheduled]",
+    "#[Cacheable]",
+    "WinterWebSwooleApplication",
+    "WinterModule"
+  ]
 }

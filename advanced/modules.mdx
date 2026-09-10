@@ -1,0 +1,214 @@
+---
+title: "Extend Winter Boot with Modules and Integrations"
+sidebarTitle: "Modules"
+description: "Package reusable infrastructure as pluggable Winter Boot modules. Covers the WinterModule interface, first-party community modules, and building your own custom module."
+---
+
+Winter Boot's module system gives you a clean, attribute-driven mechanism for bundling infrastructure integrations — Redis, Kafka, Doctrine ORM, service discovery, and more — as self-contained, reusable units. Modules are discovered and loaded before the application starts, so each module can register its own beans, scan additional namespaces, and run any required initialisation without touching your application code. The `WinterModule` interface keeps the contract minimal: implement two lifecycle hooks and annotate your class with `#[Module]`.
+
+## The `WinterModule` Interface
+
+Every module must implement the `WinterModule` interface. The framework calls its two lifecycle methods during startup in a predictable order.
+
+```php
+use dev\winterframework\core\app\WinterModule;
+use dev\winterframework\core\context\ApplicationContext;
+use dev\winterframework\core\context\ApplicationContextData;
+
+class MyCustomModule implements WinterModule {
+
+    /**
+     * Called during the module loading phase.
+     * Register beans, validate configuration, check required extensions here.
+     */
+    public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+        // initialise resources
+    }
+
+    /**
+     * Called after all modules are loaded and the application context is ready.
+     * Start background processes, connect to external services, etc.
+     */
+    public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+        // begin operations
+    }
+}
+```
+
+<ParamField body="init()" type="void">
+  Called during the **module loading** phase. Use this hook to register beans, validate configuration, and verify required PHP extensions are present.
+</ParamField>
+
+<ParamField body="begin()" type="void">
+  Called after **all modules are loaded** and the application context is fully ready. Use this hook to open connections, start background processes, or subscribe to events.
+</ParamField>
+
+## The `#[Module]` Attribute
+
+Annotate every module class with `#[Module]`. This tells the framework how to scan the module's namespaces and provides metadata used in log output.
+
+```php
+use dev\winterframework\stereotype\Module;
+
+#[Module(
+    title: 'My Custom Module',      // human-readable name shown in logs
+    initMethod: 'init',             // method called on load (default: 'init')
+    destroyMethod: '',              // method called on shutdown (optional)
+    namespaces: [],                 // extra PSR-4 namespaces to scan
+)]
+class MyCustomModule implements WinterModule {
+    // ...
+}
+```
+
+<Note>
+  When `namespaces` is left empty, the framework automatically registers the namespace derived from the module file's location. Only provide explicit `[namespace, directory]` pairs when your module ships classes in directories outside its own file path.
+</Note>
+
+## Enabling Modules in `application.yml`
+
+Declare modules in your `application.yml` under the top-level `modules` key. Each entry requires a `module` class name and an `enabled` flag.
+
+```yaml application.yml
+modules:
+  - module: 'dev\winterframework\telemetry\OpenTelemetryModule'
+    enabled: true
+    configFile: 'config/telemetry.yml'   # optional path to module-specific config
+
+  - module: 'dev\winterframework\data\redis\RedisModule'
+    enabled: true
+
+  - module: 'dev\winterframework\kafka\KafkaModule'
+    enabled: false   # set to false to temporarily disable
+```
+
+<Warning>
+  Modules are loaded in the order they appear in `application.yml`. If one module depends on beans registered by another, place the dependency first in the list.
+</Warning>
+
+## First-Party Modules
+
+All official modules live in the `suvera/winter-modules` monorepo. Install the entire collection with a single Composer command:
+
+```bash
+composer require suvera/winter-modules
+```
+
+<CardGroup cols={2}>
+  <Card title="winter-data-redis" icon="database">
+    Redis-backed caching (`SharedKvCache`) and async task queue support.
+  </Card>
+  <Card title="winter-kafka" icon="arrow-right-arrow-left">
+    Apache Kafka producer and consumer integration for event streaming pipelines.
+  </Card>
+  <Card title="winter-doctrine" icon="table">
+    Doctrine ORM and DBAL for full-featured database abstraction and entity management.
+  </Card>
+  <Card title="winter-s3" icon="cloud">
+    Amazon S3 object storage — upload, download, and manage buckets from any bean.
+  </Card>
+  <Card title="winter-sqs" icon="envelope">
+    Amazon SQS message queue integration for reliable asynchronous workloads.
+  </Card>
+  <Card title="winter-opensearch" icon="magnifying-glass">
+    OpenSearch indexing and querying for full-text search and analytics.
+  </Card>
+  <Card title="winter-memdb" icon="memory">
+    In-memory database connectors for Apache Ignite, Memcached, and Hazelcast.
+  </Card>
+  <Card title="winter-eureka" icon="network-wired">
+    Service discovery via Consul and Netflix Eureka for microservice environments.
+  </Card>
+  <Card title="winter-dtce" icon="rotate">
+    Distributed Transaction Coordination Engine for saga-style distributed workflows.
+  </Card>
+</CardGroup>
+
+## Building a Custom Module
+
+Package any infrastructure concern — a third-party SDK, a custom cache layer, an internal service client — as a reusable, injectable module by following these steps.
+
+<Steps>
+
+### Create the module class
+
+```php src/Module/AcmeMyModule.php
+<?php
+declare(strict_types=1);
+
+namespace Acme\MyModule;
+
+use dev\winterframework\core\app\WinterModule;
+use dev\winterframework\core\context\ApplicationContext;
+use dev\winterframework\core\context\ApplicationContextData;
+use dev\winterframework\stereotype\Module;
+
+#[Module(title: 'Acme My Module')]
+class AcmeMyModule implements WinterModule {
+
+    public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+        // Validate required config, register beans
+    }
+
+    public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+        // Start connections or background processes
+    }
+}
+```
+
+### Register beans inside `init()`
+
+Use `ApplicationContextData::getBeanProvider()` to register beans that consumers can inject with `#[Autowired]`:
+
+```php
+public function init(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+    $client = new AcmeClient(/* config */);
+
+    $ctxData->getBeanProvider()->registerInternalBean(
+        $client,
+        AcmeClient::class,
+        true          // mark as primary bean
+    );
+}
+```
+
+### Read module configuration
+
+The framework passes the raw `moduleDef` YAML entry to your `#[Module]` attribute. Use the `ModuleTrait` helper to retrieve it:
+
+```php
+use dev\winterframework\util\ModuleTrait;
+
+#[Module(title: 'Acme My Module')]
+class AcmeMyModule implements WinterModule {
+    use ModuleTrait;
+
+    public function begin(ApplicationContext $ctx, ApplicationContextData $ctxData): void {
+        $moduleDef = $ctx->getModule(static::class);
+        $config    = $this->retrieveConfiguration($ctx, $ctxData, $moduleDef);
+
+        $host = $config['acme']['host'] ?? 'localhost';
+    }
+}
+```
+
+### Enable the module in `application.yml`
+
+```yaml application.yml
+modules:
+  - module: 'Acme\MyModule\AcmeMyModule'
+    enabled: true
+    configFile: 'config/acme.yml'
+```
+
+### Install via Composer
+
+```bash
+composer require acme/my-winter-module
+```
+
+</Steps>
+
+<Tip>
+  See the `suvera/winter-modules` repository for real-world examples of how first-party modules are structured and tested — it is the best reference when building your own.
+</Tip>

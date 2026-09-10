@@ -1,0 +1,298 @@
+---
+title: "HTTP Interceptors for Pre- and Post-Processing"
+sidebarTitle: "Interceptors"
+description: "Add cross-cutting concerns like authentication, rate limiting, and audit logging to your Winter Boot app using ControllerInterceptor and HandlerInterceptor."
+---
+
+Before a request reaches a REST controller method — and again after the method returns — Winter Boot passes the request through a chain of interceptors. Interceptors are the right place for cross-cutting concerns such as authentication, authorisation, rate limiting, audit logging, and response decoration. They operate only on requests destined for `#[RestController]` classes; static assets and non-controller routes bypass the interceptor pipeline entirely.
+
+Winter Boot provides two distinct interception models. Choose the one that best matches the scope you need.
+
+<CardGroup cols={2}>
+  <Card title="ControllerInterceptor" icon="shield-halved">
+    Scoped to a **single controller class**. Implement it directly on your controller. No registration required.
+  </Card>
+  <Card title="HandlerInterceptor" icon="globe">
+    Scoped to the **whole application**. Registered in a `WebMvcConfigurer` bean and matched to requests by URI regex.
+  </Card>
+</CardGroup>
+
+## 1. ControllerInterceptor
+
+`ControllerInterceptor` (namespace `dev\winterframework\core\web\ControllerInterceptor`) is applied by having your **controller itself** implement the interface. Every request routed to that controller passes through its `preHandle` and `postHandle` methods, regardless of which handler method is invoked.
+
+```php
+interface ControllerInterceptor
+{
+    public function preHandle(
+        HttpRequest      $request,
+        ResponseEntity   $response,
+        ReflectionMethod $handler
+    ): bool;
+
+    public function postHandle(
+        HttpRequest      $request,
+        ResponseEntity   $response,
+        ReflectionMethod $handler
+    ): void;
+}
+```
+
+The `$handler` argument is the `ReflectionMethod` instance for the specific handler method that is about to be (or has just been) called — useful when you need to inspect attributes or method-level metadata.
+
+| Method | Called when | Return value |
+|---|---|---|
+| `preHandle()` | Before the handler method executes | `true` → continue; `false` → abort |
+| `postHandle()` | After the handler method executes successfully | N/A — return type is `void` |
+
+<Warning>
+  `postHandle` is **not** called if the handler method throws an exception. Use `HandlerInterceptor::afterCompletion()` if you need guaranteed post-request cleanup.
+</Warning>
+
+### Example: Per-Controller Authentication Guard
+
+```php OrderController.php
+<?php
+
+namespace dev\winterboot\samples\controller;
+
+use dev\winterframework\core\web\ControllerInterceptor;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\stereotype\web\GetMapping;
+use dev\winterframework\web\http\HttpRequest;
+use dev\winterframework\web\http\ResponseEntity;
+use ReflectionMethod;
+
+#[RestController]
+class OrderController implements ControllerInterceptor
+{
+    #[Autowired]
+    protected AuthService $authService;
+
+    // --- ControllerInterceptor ---
+
+    public function preHandle(
+        HttpRequest      $request,
+        ResponseEntity   $response,
+        ReflectionMethod $handler
+    ): bool {
+        $token = $request->getFirstHeader('Authorization');
+
+        if (!$this->authService->isValid($token)) {
+            $response->withStatus(\dev\winterframework\web\http\HttpStatus::$UNAUTHORIZED)
+                     ->withJson(['error' => 'Unauthorized']);
+            return false; // stop processing — no controller method is called
+        }
+
+        return true; // continue to the handler method
+    }
+
+    public function postHandle(
+        HttpRequest      $request,
+        ResponseEntity   $response,
+        ReflectionMethod $handler
+    ): void {
+        // Runs after the handler method; useful for response decoration
+    }
+
+    // --- Handler methods ---
+
+    #[GetMapping(path: '/orders')]
+    public function listOrders(): array
+    {
+        return [];
+    }
+}
+```
+
+## 2. HandlerInterceptor
+
+`HandlerInterceptor` (namespace `dev\winterframework\core\web\HandlerInterceptor`) provides application-wide interception. You register interceptors in a `WebMvcConfigurer` bean and associate each one with one or more URI regex patterns. Only requests whose URI matches a registered pattern pass through that interceptor.
+
+```php
+interface HandlerInterceptor
+{
+    public function preHandle(HttpRequest $request, ResponseEntity $response): bool;
+
+    public function postHandle(HttpRequest $request, ResponseEntity $response): void;
+
+    public function afterCompletion(
+        HttpRequest    $request,
+        ResponseEntity $response,
+        ?Throwable     $ex = null
+    ): void;
+}
+```
+
+| Method | Called when | Return value |
+|---|---|---|
+| `preHandle()` | Before the handler method (and before `ControllerInterceptor::preHandle`) | `true` → continue; `false` → abort, response sent by this interceptor |
+| `postHandle()` | After the handler method executes successfully | `void` |
+| `afterCompletion()` | After the response is rendered, even if an exception occurred | `void`; `$ex` is non-null when an exception was thrown |
+
+<Steps>
+  <Step title="Implement HandlerInterceptor">
+
+    Create a class that implements `HandlerInterceptor` and define your logic in the three lifecycle methods.
+
+    ```php RequestLoggingInterceptor.php
+    <?php
+
+    namespace dev\winterboot\samples\interceptor;
+
+    use dev\winterframework\core\web\HandlerInterceptor;
+    use dev\winterframework\util\log\Wlf4p;
+    use dev\winterframework\web\http\HttpRequest;
+    use dev\winterframework\web\http\ResponseEntity;
+    use Throwable;
+
+    class RequestLoggingInterceptor implements HandlerInterceptor
+    {
+        use Wlf4p; // provides self::logInfo(), self::logError(), etc.
+
+        public function preHandle(HttpRequest $request, ResponseEntity $response): bool
+        {
+            self::logInfo('Incoming ' . $request->getMethod() . ' ' . $request->getUri());
+            return true; // always continue
+        }
+
+        public function postHandle(HttpRequest $request, ResponseEntity $response): void
+        {
+            self::logInfo('Handled ' . $request->getUri()
+                . ' → HTTP ' . $response->getStatus()->getValue());
+        }
+
+        public function afterCompletion(
+            HttpRequest    $request,
+            ResponseEntity $response,
+            ?Throwable     $ex = null
+        ): void {
+            if ($ex !== null) {
+                self::logError('Exception during ' . $request->getUri() . ': ' . $ex->getMessage());
+            }
+            self::logInfo('Request complete: ' . $request->getUri());
+        }
+    }
+    ```
+
+  </Step>
+  <Step title="Register with WebMvcConfigurer">
+
+    Annotate a class with `#[Configuration]` and implement `WebMvcConfigurer` (namespace `dev\winterframework\core\web\config\WebMvcConfigurer`). Call `$registry->addInterceptor()` inside `addInterceptors()` to register each interceptor with its URI patterns.
+
+    ```php MyWebConfigurer.php
+    <?php
+
+    namespace dev\winterboot\samples\config;
+
+    use dev\winterframework\core\web\config\InterceptorRegistry;
+    use dev\winterframework\core\web\config\WebMvcConfigurer;
+    use dev\winterframework\stereotype\Configuration;
+    use dev\winterboot\samples\interceptor\RequestLoggingInterceptor;
+    use dev\winterboot\samples\interceptor\AdminAccessInterceptor;
+
+    #[Configuration(name: 'webMvcConfigurer')]
+    class MyWebConfigurer implements WebMvcConfigurer
+    {
+        public function addInterceptors(InterceptorRegistry $registry): void
+        {
+            // Apply to every URI path
+            $registry->addInterceptor(new RequestLoggingInterceptor(), '.*');
+
+            // Apply only to /admin/* and /super/* paths
+            $registry->addInterceptor(
+                new AdminAccessInterceptor(),
+                '^\/admin\/.*',
+                '^\/super\/.*'
+            );
+        }
+    }
+    ```
+
+  </Step>
+</Steps>
+
+### Path-Scoped Interceptor Example
+
+The `AdminAccessInterceptor` below demonstrates how to enforce role-based access for a subset of URIs.
+
+```php AdminAccessInterceptor.php
+<?php
+
+namespace dev\winterboot\samples\interceptor;
+
+use dev\winterframework\core\web\HandlerInterceptor;
+use dev\winterframework\web\http\HttpRequest;
+use dev\winterframework\web\http\HttpStatus;
+use dev\winterframework\web\http\ResponseEntity;
+use Throwable;
+
+class AdminAccessInterceptor implements HandlerInterceptor
+{
+    public function preHandle(HttpRequest $request, ResponseEntity $response): bool
+    {
+        $role = $request->getFirstHeader('X-User-Role');
+
+        if ($role !== 'admin') {
+            $response->withStatus(HttpStatus::$FORBIDDEN)
+                     ->withJson(['error' => 'Admin access required']);
+            return false; // short-circuit — no further interceptors or controller called
+        }
+
+        return true;
+    }
+
+    public function postHandle(HttpRequest $request, ResponseEntity $response): void {}
+
+    public function afterCompletion(
+        HttpRequest    $request,
+        ResponseEntity $response,
+        ?Throwable     $ex = null
+    ): void {}
+}
+```
+
+### InterceptorRegistry.addInterceptor
+
+```php
+public function addInterceptor(HandlerInterceptor $interceptor, string ...$regexPaths): void;
+```
+
+<ParamField body="$interceptor" type="HandlerInterceptor" required>
+  An instance of `HandlerInterceptor` to register.
+</ParamField>
+
+<ParamField body="$regexPaths" type="string" required>
+  One or more PHP regex patterns (without delimiters). Only requests matching at least one pattern are passed to this interceptor. Use `'.*'` to match every request, or anchored patterns like `'^\/api\/.*'` to restrict an interceptor to a sub-tree of your API.
+</ParamField>
+
+<Note>
+  Winter Boot validates each regex at startup and throws `InvalidSyntaxException` for malformed patterns.
+</Note>
+
+## Execution Order
+
+When multiple interceptors are registered, they run in **registration order** for `preHandle` and in **reverse registration order** for `postHandle` and `afterCompletion`.
+
+<Steps>
+  <Step title="HandlerInterceptor::preHandle">
+    First registered runs first. If any `preHandle` returns `false`, the chain stops immediately — no further `preHandle` calls are made, and the controller method is not invoked.
+  </Step>
+  <Step title="ControllerInterceptor::preHandle">
+    Runs after all `HandlerInterceptor::preHandle` calls have returned `true`. This is the per-controller gate check.
+  </Step>
+  <Step title="Controller method executes">
+    The matched handler method runs and produces a return value.
+  </Step>
+  <Step title="HandlerInterceptor::postHandle">
+    Last registered runs first (reverse order). Only called when no exception was thrown.
+  </Step>
+  <Step title="HandlerInterceptor::afterCompletion">
+    Last registered runs first (reverse order). Always called — even when an exception occurred. Only interceptors that already completed their `preHandle` step have their `afterCompletion` invoked.
+  </Step>
+</Steps>
+
+<Tip>
+  Use `afterCompletion` for resource cleanup (closing connections, clearing thread-locals) because it is the only lifecycle hook guaranteed to run regardless of whether the request succeeded or failed.
+</Tip>

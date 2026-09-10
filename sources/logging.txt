@@ -1,0 +1,129 @@
+Logging - Winter Boot
+
+Operations
+
+# Logging
+
+Structured, configurable application logging powered by Monolog and the Wlf4p trait.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+Winter Boot uses Monolog as its logging engine and wraps it with the `Wlf4p` trait so that every class in your application gains a consistent, zero-boilerplate logging API. The trait resolves the correct logger and log level for each class automatically — including any per-class or per-namespace level overrides you define in `logger.yml` — so you never have to manage logger instances directly.
+
+---
+
+## The Wlf4p Trait
+
+Add `use Wlf4p;` to any class to get access to the full suite of logging methods. All methods are **static**, but because PHP traits inherit `static::class`, they log under the name of the calling class, not the trait itself. The following log-level methods are available:
+
+Method | Monolog level
+---|---
+`logDebug()` | `DEBUG`
+`logInfo()` | `INFO`
+`logNotice()` | `NOTICE`
+`logWarning()` | `WARNING`
+`logError()` | `ERROR`
+`logCritical()` | `CRITICAL`
+`logAlert()` | `ALERT`
+`logEmergency()` | `EMERGENCY`
+`logException(Throwable $ex, string $message = '', array $context = [])` | `ERROR` — prepends `$message` then appends full backtrace
+`logEx(Throwable $e, string $message = '', array $context = [])` | `ERROR` — logs class, code, message, file, and line
+
+The standard level methods (`logDebug`, `logInfo`, `logNotice`, `logWarning`, `logError`, `logCritical`, `logAlert`, `logEmergency`) each accept `(string $message, array $context = [])`. The exception helpers (`logException`, `logEx`) accept `(Throwable, string $message = '', array $context = [])`.
+
+Instance usage:
+
+```
+use dev\winterframework\util\log\Wlf4p;
+
+class OrderService
+{
+    use Wlf4p;
+
+    public function processOrder(int $orderId): void
+    {
+        $this->logInfo('Processing order', ['orderId' => $orderId]);
+
+        try {
+            // … business logic …
+            $this->logDebug('Order processed successfully', ['orderId' => $orderId]);
+        } catch (\Throwable $e) {
+            $this->logException($e, 'Failed to process order: ');
+        }
+    }
+}
+```
+
+---
+
+## Configuration — logger.yml
+
+Create a file named `logger.yml` in the `config` directory that you specify in `WinterBootApplication`. Winter Boot loads this file at startup and configures Monolog accordingly. The configuration format follows the **monolog-cascade** schema, which allows you to declare loggers, handlers, formatters, and processors entirely in YAML.
+
+```
+loggers:
+    myLogger:
+        handlers: [ info_file_handler ]
+        processors: [ web_processor ]
+        custom_level:
+            # Override log level per fully-qualified class name or namespace prefix.
+            # Only log messages at or above the given level will be emitted.
+            some\namespace\SomeClass: DEBUG
+            another\namespace\AnotherClass: ERROR
+            other\namespace: INFO
+            other\namespace\SilentClass: NONE   # suppress all logging for this class
+
+formatters:
+    dashed:
+        class: Monolog\Formatter\LineFormatter
+        format: "%datetime%-%channel%.%level_name% - %message%\n"
+
+handlers:
+    console:
+        class: Monolog\Handler\StreamHandler
+        level: DEBUG
+        formatter: dashed
+        processors: [ memory_processor ]
+        stream: php://stdout
+
+    info_file_handler:
+        class: Monolog\Handler\StreamHandler
+        level: INFO
+        formatter: dashed
+        stream: ../logs/MyApp.log
+
+processors:
+    web_processor:
+        class: Monolog\Processor\WebProcessor
+
+    memory_processor:
+        class: Monolog\Processor\MemoryUsageProcessor
+```
+
+### Key configuration sections
+
+**`loggers`** — defines one or more named loggers. Each logger references the handlers and processors it uses. The `custom_level` map lets you control the effective log level for individual classes or entire namespaces without touching your code.
+
+**`formatters`** — declares Monolog formatter instances. `LineFormatter` supports a custom `format` string using Monolog's placeholder tokens (`%datetime%`, `%channel%`, `%level_name%`, `%message%`).
+
+**`handlers`** — declares where log records are written. `StreamHandler` writes to files or streams such as `php://stdout`. Each handler references a formatter and optionally its own processors.
+
+**`processors`** — declares Monolog processors that enrich log records. `WebProcessor` appends HTTP request details; `MemoryUsageProcessor` appends current memory usage.
+
+### Per-class log levels with custom_level
+
+The `custom_level` map under a logger accepts fully-qualified class names or namespace prefixes as keys. The longest matching prefix wins. Supported levels are `DEBUG`, `INFO`, `NOTICE`, `WARNING`, `ERROR`, `CRITICAL`, `ALERT`, `EMERGENCY`, and `NONE` (suppresses all output).
+
+```
+loggers:
+    myLogger:
+        handlers: [ info_file_handler ]
+        custom_level:
+            app\service\PaymentService: DEBUG   # verbose for payment debugging
+            app\service: WARNING                # all other services: warnings and above
+            app: ERROR                          # everything else in app\: errors only
+```
+
+For advanced configuration options — such as multiple loggers, log rotation, or remote handlers — refer to the monolog-cascade documentation.

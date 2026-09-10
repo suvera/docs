@@ -1,0 +1,186 @@
+Asynchronous Task Execution with #[Async] in Winter Boot - Winter Boot
+
+Async & Scheduling
+
+# Asynchronous Task Execution with #[Async] in Winter Boot
+
+Execute service methods asynchronously using #[Async] in Winter Boot. Background workers handle tasks so your main request thread stays fully responsive.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+Winter Boot's asynchronous execution model lets you fire off any service or component method as a background task — the calling code returns immediately while a dedicated pool of Swoole worker processes handles the actual work. This non-blocking design keeps web request latency low even when individual operations are expensive, because heavy lifting happens outside the request/response cycle entirely. Under the hood, arguments are serialised into an in-memory (or Redis-backed) queue and consumed by background workers, so the concurrency model is process-based rather than thread-based.
+
+## Prerequisites
+
+Async support is powered by the Swoole PHP extension. Install it via PECL and then enable it in your `php.ini` before proceeding.
+
+```
+pecl install swoole
+```
+
+Enable Swoole in php.ini:
+
+```
+extension=swoole.so
+```
+
+## Enabling Async on the Application Class
+
+Add the `#[EnableAsync]` attribute to your `#[WinterBootApplication]` class. The framework validates at boot time that both attributes are present and that Swoole is loaded — a `TypeError` or `AnnotationException` is thrown otherwise.
+
+```
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\stereotype\task\EnableAsync;
+use dev\winterframework\web\WinterWebSwooleApplication;
+
+#[WinterBootApplication(scanPackages: ['com\example'])]
+#[EnableAsync]
+class MyApplication
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(self::class);
+    }
+}
+```
+
+## Marking a Method as Async
+
+Annotate any `public`, non-final, non-abstract method on a `#[Service]` or `#[Component]` bean with `#[Async]`. When the method is called at runtime the framework serialises its arguments and dispatches the call to a background worker — the caller receives control back instantly.
+
+```
+use dev\winterframework\stereotype\Service;
+use dev\winterframework\task\async\stereotype\Async;
+
+#[Service]
+class NotificationService
+{
+    #[Async]
+    public function sendWelcomeEmail(string $recipientEmail, string $userName): void
+    {
+        // This runs in a background worker process.
+        // Heavy I/O, third-party API calls, etc. go here.
+        echo "Sending welcome email to {$recipientEmail} from PID " . getmypid();
+    }
+}
+```
+
+`#[Async]` only works on methods belonging to **service or component beans** managed by the Winter Boot container. Calling it on a plain PHP class that was instantiated with `new` will **not** run asynchronously — the method executes synchronously as a normal call.
+
+An `#[Async]` method **must** declare a `void` return type. Because the caller does not wait for the worker to finish, there is no mechanism to return a value back to the calling code.
+
+### Method Parameter Constraints
+
+The framework serialises method arguments to pass them to a worker process. Each parameter must be typed as a scalar (`int`, `float`, `string`, or `bool`). Avoid `mixed` types; the framework logs an error at boot if it encounters them.
+
+```
+#[Service]
+class ReportService
+{
+    // ✅ Scalar parameters — fully supported
+    #[Async]
+    public function generateReport(int $reportId, string $format, bool $compress): void
+    {
+        // background work …
+    }
+
+    // ⚠️  Complex/object parameters are not recommended
+    // #[Async]
+    // public function processOrder(Order $order): void { … }
+}
+```
+
+## Configuration
+
+Configure the async worker pool in `application.yml` under `winter.task.async`:
+
+```
+winter:
+  task:
+    async:
+      poolSize: 4          # Number of background worker processes
+      queueCapacity: 100   # Maximum concurrent async requests in the queue
+      argsSize: 2048       # Maximum serialised size (bytes) of method arguments
+```
+
+Key | Description
+---|---
+`poolSize` | Total number of dedicated background worker processes to start.
+`queueCapacity` | Maximum number of async calls that can be queued and awaiting execution at any one time.
+`argsSize` | Upper limit in bytes for the combined serialised arguments of a single async call.
+
+### Queue Storage
+
+By default, Winter Boot uses **shared memory** as its async queue. Pending calls are lost if the application restarts. For persistence across restarts, switch to the Redis-backed queue store provided by the `winter-data-redis` module:
+
+```
+winter:
+  task:
+    async:
+      poolSize: 4
+      queueCapacity: 100
+      argsSize: 2048
+      queueStorage:
+        handler: dev\winterframework\data\redis\async\AsyncRedisQueueStore
+```
+
+## Complete Example
+
+```
+// Application entry point
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\stereotype\task\EnableAsync;
+use dev\winterframework\web\WinterWebSwooleApplication;
+
+#[WinterBootApplication(scanPackages: ['com\example'])]
+#[EnableAsync]
+class MyApplication
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(self::class);
+    }
+}
+```
+
+```
+// Async service
+use dev\winterframework\stereotype\Service;
+use dev\winterframework\task\async\stereotype\Async;
+
+#[Service]
+class AuditService
+{
+    #[Async]
+    public function logActivity(string $userId, string $action, string $resource): void
+    {
+        // Runs in a background worker — caller is not blocked.
+        $timestamp = date('Y-m-d H:i:s');
+        echo "[{$timestamp}] User {$userId} performed {$action} on {$resource} (PID: " . getmypid() . ")\n";
+    }
+}
+```
+
+```
+// Controller calling the async service
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\web\http\ResponseEntity;
+
+#[RestController]
+class UserController
+{
+    #[Autowired]
+    private AuditService $auditService;
+
+    public function updateProfile(string $userId, string $resource): ResponseEntity
+    {
+        // Fire and forget — returns immediately
+        $this->auditService->logActivity($userId, 'UPDATE', $resource);
+
+        return ResponseEntity::ok(['status' => 'Profile updated']);
+    }
+}
+```

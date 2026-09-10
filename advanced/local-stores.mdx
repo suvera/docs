@@ -1,0 +1,167 @@
+---
+title: "In-Process Key-Value Stores for Local State"
+sidebarTitle: "Local Stores"
+description: "Share fast in-memory state across all Swoole workers on a host using Winter Boot's built-in KV store and Queue store — no external infrastructure required."
+---
+
+Winter Boot ships two lightweight in-process stores — a Key-Value store and a Queue store — that run as child processes alongside your Swoole workers. Every worker process on the same host connects to these stores over a local TCP socket, giving them a shared memory space with zero external infrastructure. The stores are intentionally node-local: they are fast because no network round-trip leaves the machine, but they do not replicate across hosts. For distributed, multi-node state use the `winter-data-redis` module instead.
+
+<Info>
+  Both stores are **node-local**. All Swoole worker processes on the same host share the same store instance, but two separate hosts each run their own independent stores. If you need cross-node shared state, see the [Redis module](/advanced/modules).
+</Info>
+
+---
+
+## Key-Value Store
+
+The KV store provides a fast, typed key-value cache scoped by a *domain* string. It is used internally by the `SharedKvCache` bean and is available to any bean that autowires `KvTemplate`.
+
+### Enabling the KV Store
+
+Add the following block to your `application.yml`. The store will not start unless `port` is a positive integer.
+
+```yaml application.yml
+winter:
+    kv:
+        port: 7880       # local TCP port the KV server listens on
+        address:         # optional bind address; defaults to 127.0.0.1
+```
+
+### Autowiring `KvTemplate`
+
+Once the store is enabled, the framework registers a `KvTemplate` bean automatically. Inject it with `#[Autowired]`:
+
+```php src/Service/SessionCacheService.php
+use dev\winterframework\io\kv\KvTemplate;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class SessionCacheService {
+
+    #[Autowired]
+    private KvTemplate $kvTemplate;
+
+    public function storeSession(string $userId, array $data): void {
+        $this->kvTemplate->put('sessions', $userId, $data, ttl: 3600);
+    }
+
+    public function loadSession(string $userId): mixed {
+        return $this->kvTemplate->get('sessions', $userId);
+    }
+}
+```
+
+### `KvTemplate` API Reference
+
+| Method | Signature | Description |
+|---|---|---|
+| `put` | `put(string $domain, string $key, mixed $data, int $ttl = 0): bool` | Store a value. `$ttl` is in seconds; `0` means no expiry. |
+| `putIfNot` | `putIfNot(string $domain, string $key, mixed $data, int $ttl = 0): bool` | Store only if the key does not already exist. |
+| `get` | `get(string $domain, string $key): mixed` | Retrieve a value, or `null` if absent. |
+| `has` | `has(string $domain, string $key): bool` | Check whether a key exists. |
+| `del` | `del(string $domain, string $key): bool` | Delete a single key. |
+| `delAll` | `delAll(string $domain): bool` | Delete every key in a domain. |
+| `incr` | `incr(string $domain, string $key, int\|float\|null $incVal = null): int\|float` | Atomically increment a numeric value. |
+| `decr` | `decr(string $domain, string $key, int\|float\|null $decVal = null): int\|float` | Atomically decrement a numeric value. |
+| `getSet` | `getSet(string $domain, string $key, mixed $value): mixed` | Set a new value and return the old one. |
+| `getSetIfNot` | `getSetIfNot(string $domain, string $key, mixed $data, int $ttl = 0): mixed` | Set a new value only if the key does not exist; returns the current value. |
+| `append` | `append(string $domain, string $key, string $append): int` | Append a string to an existing value; returns the new length. |
+| `strLen` | `strLen(string $domain, string $key): int` | Return the byte length of the stored string value. |
+| `keys` | `keys(string $domain, string $key): array` | Return matching keys (supports glob patterns). |
+| `getAll` | `getAll(string $domain): array` | Return all key→value pairs in a domain. |
+| `stats` | `stats(): array` | Return store statistics (connections, memory, etc.). |
+| `ping` | `ping(): int` | Health-check the store; returns latency in microseconds. |
+
+### Shared KV Cache
+
+The `SharedKvCache` bean is backed by this KV store. Enabling the store automatically makes `SharedKvCache` available to any class annotated with `#[Cacheable]`, with no additional configuration required.
+
+---
+
+## Queue Store
+
+The Queue store provides a lightweight FIFO queue scoped by a *queue name* string. The framework uses it internally as the default backing store for `#[Async]` tasks and scheduled workers. You can also enqueue and dequeue your own messages directly via `QueueSharedTemplate`.
+
+### Enabling the Queue Store
+
+```yaml application.yml
+winter:
+    queue:
+        port: 7881       # local TCP port the queue server listens on
+        address:         # optional bind address; defaults to 127.0.0.1
+```
+
+### Autowiring `QueueSharedTemplate`
+
+```php src/Service/NotificationDispatcher.php
+use dev\winterframework\io\queue\QueueSharedTemplate;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class NotificationDispatcher {
+
+    #[Autowired]
+    private QueueSharedTemplate $queue;
+
+    public function dispatch(string $userId, string $message): void {
+        $this->queue->enqueue('notifications', [
+            'userId'  => $userId,
+            'message' => $message,
+        ]);
+    }
+
+    public function processNext(): mixed {
+        return $this->queue->dequeue('notifications');
+    }
+}
+```
+
+### `QueueSharedTemplate` API Reference
+
+| Method | Signature | Description |
+|---|---|---|
+| `enqueue` | `enqueue(string $queue, mixed $data): bool` | Add an item to the tail of the named queue. |
+| `dequeue` | `dequeue(string $queue): mixed` | Remove and return the item at the head of the queue, or `null` if empty. |
+| `size` | `size(string $queue): int` | Return the number of items currently in the queue. |
+| `delete` | `delete(string $queue): bool` | Remove the entire named queue. |
+| `stats` | `stats(): array` | Return store statistics. |
+| `ping` | `ping(): int` | Health-check the store; returns latency in microseconds. |
+
+### Async Task Queue
+
+When `#[EnableAsync]` is active on your application class, Winter Boot automatically registers worker processes that consume from the internal async queue. The Queue store must be enabled for this to work:
+
+```yaml application.yml
+winter:
+    queue:
+        port: 7881
+```
+
+<Note>
+  The Queue store is required for `#[Async]` tasks. If the port is not set (or is `0`), the async worker processes will not start and async method calls will be silently dropped.
+</Note>
+
+---
+
+## Running Both Stores Together
+
+A typical `application.yml` that enables both stores side-by-side:
+
+```yaml application.yml
+winter:
+    kv:
+        port: 7880
+        address: 127.0.0.1
+
+    queue:
+        port: 7881
+        address: 127.0.0.1
+```
+
+Both stores are started as Swoole sub-processes before any HTTP workers boot, so they are always ready when your beans initialise. You can verify connectivity by calling `$kvTemplate->ping()` or `$queue->ping()` inside an `#[OnApplicationReady]` listener.
+
+<Tip>
+  For production workloads that span multiple hosts — or that need persistence across restarts — replace the node-local stores with the `winter-data-redis` module. It provides Redis-backed implementations of both `KvTemplate` and the async task queue that work across any number of nodes.
+</Tip>

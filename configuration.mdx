@@ -1,0 +1,386 @@
+---
+title: "Configure Your Winter Boot Application"
+sidebarTitle: "Configuration"
+description: "Set up application.yml, inject properties with #[Value], define beans in #[Configuration] classes, chain multiple property sources, and use fallback syntax for safe defaults."
+---
+
+Winter Boot's configuration system is built around two complementary models: static property externalisation via `application.yml` and programmatic bean construction via `#[Configuration]` classes. Both are fully integrated with the dependency-injection container, so any property or bean is available for injection anywhere in your application. This page covers every layer of the system — from the YAML file structure and the `#[Value]` attribute, through additional property sources, to the `||` fallback-chain syntax.
+
+## application.yml Structure
+
+All externalised properties live in `config/application.yml` (the path is set by the `configDirectory` option of `#[WinterBootApplication]`). Winter Boot parses this file at startup and makes every key available to the property context. The reserved top-level keys used by the framework are shown below; custom application keys can live anywhere else in the file.
+
+```yaml config/application.yml
+server:
+    port: 8080                    # Port the Swoole HTTP server binds to
+    address: 127.0.0.1            # Network interface to listen on
+    context-path: /               # URL prefix for all routes
+
+winter:
+    application:
+        name: My Microservice     # Human-readable service name
+        id: my-microservice       # Machine-readable identifier
+        version: 1.0.0-DEV        # Semantic version string
+
+datasource:
+    -   name: default
+        url: "sqlite:/opt/databases/mydb.sq3"
+        username:
+        password:
+        validationQuery: SELECT 'ok'
+        driverClass: dev\winterframework\pdbc\pdo\PdoDataSource
+        connection:
+            persistent: true
+            errorMode: ERRMODE_EXCEPTION
+            columnsCase: CASE_NATURAL
+            idleTimeout: 300
+            autoCommit: true
+            defaultrowprefetch: 100
+
+# Custom application properties — any structure you like:
+myApp:
+    value1: This is a string property
+    value2: 99
+    value3: true
+    value4: 10.89
+```
+
+### Reserved Top-Level Keys
+
+<ParamField path="server.port" type="integer" default="8080">
+  Port the Swoole HTTP server binds to.
+</ParamField>
+
+<ParamField path="server.address" type="string" default="127.0.0.1">
+  Network interface the server listens on. Use `0.0.0.0` to bind all interfaces.
+</ParamField>
+
+<ParamField path="server.context-path" type="string" default="/">
+  URL prefix prepended to all mapped routes.
+</ParamField>
+
+<ParamField path="winter.application.name" type="string">
+  Human-readable service name. Exposed by health and metrics endpoints.
+</ParamField>
+
+<ParamField path="winter.application.id" type="string">
+  Machine-readable service identifier used in logs and service-discovery registrations.
+</ParamField>
+
+<ParamField path="winter.application.version" type="string">
+  Semantic version string for the running service.
+</ParamField>
+
+<ParamField path="datasource" type="array">
+  List of datasource definitions. Each entry requires at least `name`, `url`, and `driverClass`.
+</ParamField>
+
+## #[WinterBootApplication] Attribute Options
+
+The entry-point attribute controls how Winter Boot boots your application. All parameters are optional and have sensible defaults.
+
+```php Application.php
+<?php
+
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterWebSwooleApplication;
+
+#[WinterBootApplication(
+    // Directories to search for application.yml and other config files
+    configDirectory: [__DIR__ . '/config'],
+
+    // Namespace-to-directory mappings for component scanning:
+    // each entry is [NamespacePrefix, BaseDirectory]
+    scanNamespaces: [
+        ['com\\example\\myapp', __DIR__ . '/src']
+    ],
+
+    // If true, the autoloader will attempt to load unknown classes during scan
+    autoload: false,
+
+    // Namespaces the scanner should skip entirely
+    scanExcludeNamespaces: ['com\\example\\myapp\\generated'],
+
+    // Optional: profile name to load profile-specific config (e.g. application-prod.yml)
+    profile: null,
+
+    // Set to true to instantiate all beans eagerly at startup
+    // (predictable boot but slower start time)
+    eager: false
+)]
+class Application
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(Application::class);
+    }
+}
+```
+
+### Attribute Parameter Reference
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `configDirectory` | `array` | `[]` | Directories scanned for `application.yml` and other config files. |
+| `scanNamespaces` | `array` | `[]` | Pairs of `[NamespacePrefix, BaseDirectory]` for component scanning. |
+| `autoload` | `bool` | `false` | Whether the scanner tries to autoload unknown classes it encounters. |
+| `scanExcludeNamespaces` | `array` | `[]` | Namespaces the scanner skips entirely. |
+| `profile` | `string\|null` | `null` | Loads `application-{profile}.yml` and merges it over the base config. |
+| `eager` | `bool` | `false` | When `true`, all beans are instantiated at startup rather than lazily. |
+
+## Injecting Properties with #[Value]
+
+The `#[Value]` attribute injects a property from the application context into any bean property or constructor parameter. Reference YAML keys with dot notation inside `${ }`.
+
+```php src/AppConfig.php
+<?php
+
+declare(strict_types=1);
+
+namespace com\example\myapp;
+
+use dev\winterframework\stereotype\Service;
+use dev\winterframework\stereotype\Value;
+
+#[Service]
+class AppConfig
+{
+    #[Value('${server.port}')]
+    private int $serverPort;
+
+    #[Value('${winter.application.name}')]
+    private string $appName;
+
+    #[Value('${myApp.value1}')]
+    private string $customMessage;
+
+    #[Value('${myApp.value2}')]
+    private int $numericSetting;
+
+    public function getServerPort(): int   { return $this->serverPort; }
+    public function getAppName(): string   { return $this->appName; }
+}
+```
+
+<Tip>
+  `#[Value]` works on properties in any managed bean — `#[Service]`, `#[Component]`, `#[RestController]`, `#[Configuration]`, and so on. You do not need a dedicated config class.
+</Tip>
+
+## Programmatic Bean Configuration
+
+For beans that require construction logic — datasource pools, transaction managers, cache providers, third-party clients — use a `#[Configuration]` class. Methods annotated with `#[Bean]` are called once at startup and their return values are registered as managed beans. Winter Boot automatically injects other beans as method parameters.
+
+```php src/DatabaseConfig.php
+<?php
+
+declare(strict_types=1);
+
+namespace com\example\myapp;
+
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\stereotype\Value;
+
+#[Configuration]
+class DatabaseConfig
+{
+    #[Value('${datasource[0].url}')]
+    private string $dbUrl;
+
+    /**
+     * Produces a DataSource bean available for #[Autowired] injection.
+     */
+    #[Bean]
+    public function getDataSource(): DataSource
+    {
+        return new PdoDataSource($this->dbUrl);
+    }
+
+    /**
+     * Winter Boot injects the DataSource bean defined above automatically.
+     */
+    #[Bean]
+    public function getTransactionManager(DataSource $ds): PlatformTransactionManager
+    {
+        return new PdoTransactionManager($ds);
+    }
+}
+```
+
+<Note>
+  Each `#[Bean]` method is invoked exactly once. The returned instance is cached in the application context and shared across all injection points — beans are singletons by default.
+</Note>
+
+## Additional Property Sources
+
+Beyond `application.yml`, Winter Boot supports pluggable `PropertySource` implementations. Register them in `application.yml` under the `propertySources` key and reference their values with `$sourceName.key` notation.
+
+<Tabs>
+  <Tab title="Environment Variables">
+    The built-in `EnvPropertySource` reads from `$_ENV`. Register it and reference variables with the `$env.` prefix:
+
+    ```yaml config/application.yml
+    propertySources:
+        -   name: env
+            provider: dev\winterframework\io\EnvPropertySource
+
+    datasource:
+        -   name: default
+            username: "$env.DB_USERNAME"
+            password: "$env.DB_PASSWORD"
+    ```
+  </Tab>
+  <Tab title="INI File">
+    Use `IniPropertySource` to read secrets from an `.ini` file — useful for mounted Kubernetes secrets or local development overrides:
+
+    ```yaml config/application.yml
+    propertySources:
+        -   name: ini
+            provider: dev\winterframework\io\IniPropertySource
+            filePath: /var/run/secrets/db.ini
+
+    datasource:
+        -   name: default
+            username: "$ini.dbUsername"
+            password: "$ini.dbPassword"
+    ```
+
+    A matching `db.ini` file:
+
+    ```ini /var/run/secrets/db.ini
+    dbUsername = appuser
+    dbPassword = s3cr3t
+    ```
+  </Tab>
+  <Tab title="Custom Source">
+    Implement the `PropertySource` interface to pull values from any external system — HashiCorp Vault, AWS Secrets Manager, Consul, or your own API:
+
+    ```yaml config/application.yml
+    propertySources:
+        -   name: vault
+            provider: com\example\myapp\VaultPropertySource
+            url: https://vault.example.com:8200/
+            token: "$env.VAULT_TOKEN"
+
+    datasource:
+        -   name: default
+            password: "$vault.db_password"
+    ```
+  </Tab>
+</Tabs>
+
+## Fallback Chains with ||
+
+A property value can be a `||`-separated chain. Winter Boot tries each term from left to right and uses the first *present* value. This lets you layer sources — environment variable first, INI file second, hard-coded default last — without any PHP code.
+
+```yaml config/application.yml
+propertySources:
+    -   name: env
+        provider: dev\winterframework\io\EnvPropertySource
+    -   name: ini
+        provider: dev\winterframework\io\IniPropertySource
+        filePath: /etc/myapp/secrets.ini
+
+datasource:
+    -   name: default
+        # Try ENV first, then INI file, fall back to literal default
+        username: "$env.DB_USERNAME || $ini.dbUsername || appuser"
+        password: "$ini.dbPassword || $vault.db_password || secret"
+
+        # Booleans and numbers keep their type when used as literals
+        sslEnabled: "$env.DB_SSL || false"
+        poolSize:   "$env.DB_POOL_SIZE || $ini.poolSize || 10"
+
+        # A chain can end with null to make the property optional
+        optionalNote: "$env.DB_NOTE || null"
+
+        # Quoted string literal as the final default
+        welcome: "$env.DB_GREETING || 'hello world'"
+```
+
+### Fallback Chain Rules
+
+<Accordion title="Presence and fall-through rules">
+  | Value | Behaviour |
+  |---|---|
+  | Any non-empty, non-null value | **Present** — stops the chain and uses this value. |
+  | `false`, `0`, `'0'` | **Present** — stops the chain immediately. |
+  | `null` or `''` | **Falls through** to the next term in the chain. |
+  | Unknown source name | Treated as a missing key — falls through. |
+  | Single `$source.key` (no `||`) | Missing key throws a `PropertyException` (legacy behaviour). |
+  | Plain value with no `$source.key` | Never treated as a chain — `"a || b"` remains the literal string `a \|\| b`. |
+</Accordion>
+
+<Warning>
+  Always quote fallback chains in YAML. An unquoted `#` character begins a YAML comment and will silently truncate your default value.
+
+  ```yaml
+  # ❌ Dangerous — the comment truncates the value
+  password: $env.DB_PASS || secret  # default
+
+  # ✅ Safe
+  password: "$env.DB_PASS || secret"
+  ```
+</Warning>
+
+## Profiles
+
+Use the `profile` parameter of `#[WinterBootApplication]` to load environment-specific configuration. Winter Boot merges `application-{profile}.yml` on top of the base `application.yml`, with profile-specific values taking precedence.
+
+```php Application.php
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/config'],
+    scanNamespaces: [['com\\example\\myapp', __DIR__ . '/src']],
+    profile: 'prod'   // loads config/application-prod.yml
+)]
+class Application { ... }
+```
+
+```yaml config/application-prod.yml
+server:
+    port: 80
+    address: 0.0.0.0
+
+winter:
+    application:
+        version: 1.0.0
+```
+
+<Tip>
+  Combine profiles with environment-variable fallback chains to keep secrets out of version control. Store the profile name itself in `$_ENV['APP_PROFILE']` and pass it at deploy time.
+</Tip>
+
+## Complete Example
+
+The example below shows a full `application.yml` combining a custom property source, fallback chains, and all standard Winter Boot keys:
+
+```yaml config/application.yml
+server:
+    port: "$env.SERVER_PORT || 8080"
+    address: "$env.SERVER_ADDRESS || 0.0.0.0"
+
+winter:
+    application:
+        name: "$env.APP_NAME || My Service"
+        id: my-service
+        version: 1.0.0
+
+propertySources:
+    -   name: env
+        provider: dev\winterframework\io\EnvPropertySource
+    -   name: ini
+        provider: dev\winterframework\io\IniPropertySource
+        filePath: /run/secrets/app.ini
+
+datasource:
+    -   name: default
+        url: "$env.DB_URL || $ini.dbUrl"
+        username: "$env.DB_USER || $ini.dbUser || appuser"
+        password: "$env.DB_PASS || $ini.dbPass"
+        validationQuery: SELECT 1
+        driverClass: dev\winterframework\pdbc\pdo\PdoDataSource
+        connection:
+            persistent: true
+            autoCommit: true
+            idleTimeout: 300
+```

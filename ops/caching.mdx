@@ -1,0 +1,291 @@
+---
+title: "Add Response and Method Caching with Attributes"
+sidebarTitle: "Caching"
+description: "Use #[Cacheable], #[CachePut], and #[CacheEvict] to add AOP-based declarative caching to any bean method, backed by in-memory, local KV, or Redis stores."
+---
+
+Winter Boot's caching abstraction lets you add caching behaviour to any bean method without writing a single line of cache-management code. Under the hood the framework uses **Aspect-Oriented Programming (AOP)**: when it detects a caching attribute on a public method it generates a transparent proxy that intercepts calls to that method and handles cache lookups, storage, and eviction automatically. You choose the caching backend — in-memory, shared local KV store, or distributed Redis — by wiring a `CacheManager` bean, and the attributes remain identical regardless of the backend.
+
+## Enabling Caching
+
+Before any caching attributes take effect, annotate your main application class with `#[EnableCaching]`. This tells Winter Boot to scan all beans for caching attributes and create the necessary AOP proxies.
+
+```php MyApplication.php
+use dev\winterframework\stereotype\cache\EnableCaching;
+use dev\winterframework\stereotype\WinterBootApplication;
+
+#[WinterBootApplication]
+#[EnableCaching]
+class MyApplication {
+    // application entry point
+}
+```
+
+<Warning>
+`#[EnableCaching]` must be placed on the same class that carries `#[WinterBootApplication]`. Placing it on any other class will throw a `TypeError` at startup.
+</Warning>
+
+## #[Cacheable]
+
+`#[Cacheable]` is a **method-level** attribute. The first time a method is called for a given cache key, Winter Boot executes the method and stores the return value in the cache. On subsequent calls with the same key the cached value is returned directly and the method body is **not** executed.
+
+### Options
+
+<ResponseField name="cacheNames" type="string|string[]" default='"default"'>
+  One or more cache container names where the result will be stored. Accepts a single string or an array of strings.
+</ResponseField>
+
+<ResponseField name="key" type="string" default="Method name + arguments">
+  The key under which the value is cached. Supports `#{param}` expression interpolation.
+</ResponseField>
+
+<ResponseField name="keyGenerator" type="string" default="Framework managed">
+  Bean name of a class implementing `KeyGenerator` for custom key generation logic.
+</ResponseField>
+
+<ResponseField name="cacheManager" type="string" default="Framework managed">
+  Bean name of a class implementing `CacheManager`. Use when you have multiple managers registered.
+</ResponseField>
+
+<ResponseField name="cacheResolver" type="string" default="Framework managed">
+  Bean name of a class implementing `CacheResolver` for dynamic cache resolution at runtime.
+</ResponseField>
+
+<ResponseField name="condition" type="string" default='""'>
+  SpEL-style expression. When non-empty, caching only applies if the expression evaluates to `true`.
+</ResponseField>
+
+<ResponseField name="unless" type="string" default='""'>
+  SpEL-style expression. When non-empty, the result is **not** cached if the expression evaluates to `true`.
+</ResponseField>
+
+### Examples
+
+<CodeGroup>
+
+```php Default Cache
+use dev\winterframework\cache\stereotype\Cacheable;
+
+// Default cache container (in-memory, key = method name + arguments)
+#[Cacheable]
+public function getExpensiveCalculationResult(): mixed
+{
+    // Complex, time-consuming calculation
+    return 'some_calculated_value';
+}
+```
+
+```php Named Cache
+use dev\winterframework\cache\stereotype\Cacheable;
+
+// Single named cache container
+#[Cacheable('product-prices')]
+public function getProductPrice(string $productId): mixed
+{
+    // Fetch price from database or external API
+    return '19.99';
+}
+```
+
+```php Multiple Caches
+use dev\winterframework\cache\stereotype\Cacheable;
+
+// Multiple named cache containers — result is stored in both
+#[Cacheable(cacheNames: ['user-sessions', 'api-tokens'])]
+public function getUserSessionData(string $userId): mixed
+{
+    return ['session_id' => 'abc', 'token' => 'xyz'];
+}
+```
+
+</CodeGroup>
+
+## #[CachePut]
+
+`#[CachePut]` is a **method-level** attribute that **always executes** the underlying method and then writes the fresh return value to the cache. Use it when you need to keep the cache up to date after a write operation. `#[CachePut]` accepts the same options as `#[Cacheable]`.
+
+```php
+use dev\winterframework\cache\stereotype\CachePut;
+
+#[CachePut('product-prices')]
+public function updateProductPrice(string $productId, float $newPrice): mixed
+{
+    // Persist new price to the database first…
+    return $newPrice; // return value is written back to the cache
+}
+```
+
+<Warning>
+Do **not** place `#[Cacheable]` and `#[CachePut]` on the same method. They both intercept method execution in potentially conflicting ways. Winter Boot will throw a `TypeError` at startup if both are detected on the same method.
+</Warning>
+
+## #[CacheEvict]
+
+`#[CacheEvict]` is a **method-level** attribute that removes one or more entries from the cache when the annotated method is called. You can target a specific entry using the `key` option or flush an entire cache container by setting `allEntries: true`.
+
+### Additional Options
+
+<ResponseField name="allEntries" type="bool" default="false">
+  When `true`, all entries in the specified cache(s) are removed rather than just the entry matching `key`.
+</ResponseField>
+
+<ResponseField name="beforeInvocation" type="bool" default="false">
+  When `true`, the cache is cleared **before** the method executes. The default clears the cache **after** successful execution.
+</ResponseField>
+
+### Example — Clear All Entries
+
+```php
+use dev\winterframework\cache\stereotype\CacheEvict;
+
+#[CacheEvict(
+    cacheNames: 'stock-prices',
+    cacheManager: 'redisCacheManager',
+    allEntries: true,
+    beforeInvocation: false
+)]
+public function clearAllStockPricesCache(): void
+{
+    // All entries in the "stock-prices" cache are removed after this method returns.
+}
+```
+
+## Cache Backends
+
+Winter Boot ships with multiple cache backend options. Choose the one that fits your deployment topology.
+
+<CardGroup cols={3}>
+  <Card title="In-Memory" icon="memory">
+    Zero-config default. Fast and simple, but not shared across processes or nodes.
+  </Card>
+  <Card title="SharedKvCache" icon="server">
+    Shared across all processes on the same node. Ideal for single-node deployments.
+  </Card>
+  <Card title="RedisCache" icon="database">
+    Distributed cache shared across the entire cluster. Requires `winter-data-redis`.
+  </Card>
+</CardGroup>
+
+### Default In-Memory Cache
+
+Out of the box, Winter Boot registers a `SimpleCacheManager` backed by a fast PHP in-memory store. No additional configuration is required — add `#[Cacheable]` to your methods and caching works immediately.
+
+### SharedKvCache — Local Node KV Store
+
+`SharedKvCache` is backed by a local Key-Value store that is **shared across all processes on the same node**. It is a good fit for single-node deployments or for data that does not need to be distributed across a cluster.
+
+`CacheConfiguration` controls the eviction and expiry policy per cache container:
+
+<ResponseField name="maximumSize" type="int" default="PHP_INT_MAX - 1">
+  Maximum number of entries before LRU eviction kicks in.
+</ResponseField>
+
+<ResponseField name="expireAfterWriteMs" type="int" default="-1">
+  Milliseconds after which a written entry expires. `-1` means entries never expire.
+</ResponseField>
+
+<ResponseField name="expireAfterAccessMs" type="int" default="-1">
+  Milliseconds after the last access after which an entry expires.
+</ResponseField>
+
+```php CacheConfig.php
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\cache\impl\SharedKvCache;
+use dev\winterframework\cache\CacheConfiguration;
+use dev\winterframework\cache\impl\SimpleCacheManager;
+use dev\winterframework\cache\CacheManager;
+use dev\winterframework\data\kv\KvTemplate;
+
+#[Configuration]
+class CacheConfig
+{
+    #[Bean]
+    public function getCacheManager(KvTemplate $kvTemplate): CacheManager
+    {
+        $cache = new SharedKvCache(
+            $kvTemplate,
+            'stock-prices',                   // unique cache name
+            CacheConfiguration::get(
+                maximumSize: 5000,            // LRU eviction after 5 000 entries
+                expireAfterWriteMs: 600_000,  // entries expire after 10 minutes
+            )
+        );
+
+        $manager = new SimpleCacheManager();
+        $manager->addCache($cache);
+
+        return $manager;
+    }
+}
+```
+
+### RedisCache — Distributed Caching
+
+For multi-node deployments where all nodes must share the same cached data, `RedisCache` provides a distributed cache backed by Redis. It is available in the **winter-data-redis** module.
+
+<Note>
+When you define a custom `CacheManager` bean with a specific name (e.g. `"redisCacheManager"`), you must pass that name via the `cacheManager` option on your caching attributes.
+</Note>
+
+<Steps>
+
+<Step title="Define the Redis CacheManager bean">
+
+```php CacheConfig.php
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\data\redis\cache\RedisCache;
+use dev\winterframework\cache\CacheConfiguration;
+use dev\winterframework\cache\impl\SimpleCacheManager;
+use dev\winterframework\cache\CacheManager;
+use dev\winterframework\data\redis\PhpRedisTemplate;
+
+#[Configuration]
+class CacheConfig
+{
+    #[Bean('redisCacheManager')]
+    public function getRedisCacheManager(PhpRedisTemplate $redisTpl): CacheManager
+    {
+        $pricesCache = new RedisCache(
+            $redisTpl,
+            'stock-prices',
+            CacheConfiguration::get(
+                maximumSize: 5000,
+                expireAfterWriteMs: 600_000,
+            )
+        );
+
+        $manager = new SimpleCacheManager();
+        $manager->addCache($pricesCache);
+
+        return $manager;
+    }
+}
+```
+
+</Step>
+
+<Step title="Reference the bean name in your caching attributes">
+
+```php StockService.php
+use dev\winterframework\cache\stereotype\Cacheable;
+use dev\winterframework\cache\stereotype\CacheEvict;
+
+#[Cacheable(cacheNames: 'stock-prices', cacheManager: 'redisCacheManager')]
+public function getStockPrice(string $symbol): mixed
+{
+    // Only called on a cache miss; result is stored in Redis
+    return $this->stockApi->fetchPrice($symbol);
+}
+
+#[CacheEvict(cacheNames: 'stock-prices', cacheManager: 'redisCacheManager', allEntries: true)]
+public function refreshAllStockPrices(): void
+{
+    // Flushes the entire "stock-prices" cache in Redis after execution
+}
+```
+
+</Step>
+
+</Steps>

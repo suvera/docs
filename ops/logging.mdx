@@ -1,0 +1,158 @@
+---
+title: "Configure Structured Logging in Winter Boot"
+sidebarTitle: "Logging"
+description: "Add the Wlf4p trait to any class for zero-boilerplate structured logging, then tune log levels per class or namespace using a Monolog-backed logger.yml file."
+---
+
+Winter Boot uses Monolog as its logging engine and wraps it with the `Wlf4p` trait so that every class in your application gains a consistent, zero-boilerplate logging API. The trait resolves the correct logger and log level for each class automatically — including any per-class or per-namespace level overrides you define in `logger.yml` — so you never have to manage logger instances directly.
+
+## The Wlf4p Trait
+
+Add `use Wlf4p;` to any class to access the full suite of logging methods. All methods are **static**, but because PHP traits inherit `static::class`, they log under the name of the calling class, not the trait itself.
+
+### Available Methods
+
+<ResponseField name="logDebug(string $message, array $context = [])" type="method">
+  Emits a `DEBUG` level log record.
+</ResponseField>
+
+<ResponseField name="logInfo(string $message, array $context = [])" type="method">
+  Emits an `INFO` level log record.
+</ResponseField>
+
+<ResponseField name="logNotice(string $message, array $context = [])" type="method">
+  Emits a `NOTICE` level log record.
+</ResponseField>
+
+<ResponseField name="logWarning(string $message, array $context = [])" type="method">
+  Emits a `WARNING` level log record.
+</ResponseField>
+
+<ResponseField name="logError(string $message, array $context = [])" type="method">
+  Emits an `ERROR` level log record.
+</ResponseField>
+
+<ResponseField name="logCritical(string $message, array $context = [])" type="method">
+  Emits a `CRITICAL` level log record.
+</ResponseField>
+
+<ResponseField name="logAlert(string $message, array $context = [])" type="method">
+  Emits an `ALERT` level log record.
+</ResponseField>
+
+<ResponseField name="logEmergency(string $message, array $context = [])" type="method">
+  Emits an `EMERGENCY` level log record.
+</ResponseField>
+
+<ResponseField name="logException(Throwable $ex, string $message = '', array $context = [])" type="method">
+  Emits an `ERROR` record, prepends `$message`, and appends the full backtrace.
+</ResponseField>
+
+<ResponseField name="logEx(Throwable $e, string $message = '', array $context = [])" type="method">
+  Emits an `ERROR` record with the exception class, code, message, file, and line.
+</ResponseField>
+
+### Usage Example
+
+```php OrderService.php
+use dev\winterframework\util\log\Wlf4p;
+
+class OrderService
+{
+    use Wlf4p;
+
+    public function processOrder(int $orderId): void
+    {
+        $this->logInfo('Processing order', ['orderId' => $orderId]);
+
+        try {
+            // … business logic …
+            $this->logDebug('Order processed successfully', ['orderId' => $orderId]);
+        } catch (\Throwable $e) {
+            $this->logException($e, 'Failed to process order: ');
+        }
+    }
+}
+```
+
+## Configuration — logger.yml
+
+Create a file named `logger.yml` in the `config` directory you specify in `WinterBootApplication`. Winter Boot loads this file at startup and configures Monolog accordingly. The configuration format follows the **monolog-cascade** schema, which lets you declare loggers, handlers, formatters, and processors entirely in YAML.
+
+```yaml config/logger.yml
+loggers:
+    myLogger:
+        handlers: [ info_file_handler ]
+        processors: [ web_processor ]
+        custom_level:
+            # Override log level per fully-qualified class name or namespace prefix.
+            # Only log messages at or above the given level will be emitted.
+            some\namespace\SomeClass: DEBUG
+            another\namespace\AnotherClass: ERROR
+            other\namespace: INFO
+            other\namespace\SilentClass: NONE   # suppress all logging for this class
+
+formatters:
+    dashed:
+        class: Monolog\Formatter\LineFormatter
+        format: "%datetime%-%channel%.%level_name% - %message%\n"
+
+handlers:
+    console:
+        class: Monolog\Handler\StreamHandler
+        level: DEBUG
+        formatter: dashed
+        processors: [ memory_processor ]
+        stream: php://stdout
+
+    info_file_handler:
+        class: Monolog\Handler\StreamHandler
+        level: INFO
+        formatter: dashed
+        stream: ../logs/MyApp.log
+
+processors:
+    web_processor:
+        class: Monolog\Processor\WebProcessor
+
+    memory_processor:
+        class: Monolog\Processor\MemoryUsageProcessor
+```
+
+### Key Configuration Sections
+
+<Accordion title="loggers">
+Defines one or more named loggers. Each logger references the handlers and processors it uses. The `custom_level` map lets you control the effective log level for individual classes or entire namespaces without touching your code.
+</Accordion>
+
+<Accordion title="formatters">
+Declares Monolog formatter instances. `LineFormatter` supports a custom `format` string using Monolog's placeholder tokens: `%datetime%`, `%channel%`, `%level_name%`, and `%message%`.
+</Accordion>
+
+<Accordion title="handlers">
+Declares where log records are written. `StreamHandler` writes to files or streams such as `php://stdout`. Each handler references a formatter and optionally its own processors.
+</Accordion>
+
+<Accordion title="processors">
+Declares Monolog processors that enrich log records. `WebProcessor` appends HTTP request details; `MemoryUsageProcessor` appends current memory usage.
+</Accordion>
+
+## Per-Class Log Levels with custom_level
+
+The `custom_level` map under a logger accepts fully-qualified class names or namespace prefixes as keys. The **longest matching prefix wins**. This lets you enable verbose debugging for a single service while keeping everything else at a higher threshold.
+
+Supported levels: `DEBUG`, `INFO`, `NOTICE`, `WARNING`, `ERROR`, `CRITICAL`, `ALERT`, `EMERGENCY`, and `NONE` (suppresses all output).
+
+```yaml config/logger.yml
+loggers:
+    myLogger:
+        handlers: [ info_file_handler ]
+        custom_level:
+            app\service\PaymentService: DEBUG   # verbose for payment debugging
+            app\service: WARNING                # all other services: warnings and above
+            app: ERROR                          # everything else in app\: errors only
+```
+
+<Tip>
+For advanced configuration — such as multiple loggers, log rotation, or remote handlers — refer to the [monolog-cascade documentation](https://github.com/theorchard/monolog-cascade).
+</Tip>

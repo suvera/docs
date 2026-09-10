@@ -1,0 +1,276 @@
+---
+title: "JSON and XML Serialization in Winter Boot"
+sidebarTitle: "JSON & XML"
+description: "Map JSON and XML payloads to typed PHP objects using PHP 8 attributes. Covers JsonProperty, PAXB XML binding, ObjectCreator, and content-type-aware REST controllers."
+---
+
+Winter Boot provides first-class support for mapping JSON and XML payloads to strongly typed PHP objects using PHP 8 attributes. Annotate your model properties with `#[JsonProperty]` or the PAXB attributes (`#[XmlElement]`, `#[XmlAttribute]`, and friends), then let `ObjectCreator` or your REST controller deserialize the incoming data automatically. No boilerplate mapping code is required — the framework inspects attribute metadata at runtime and populates each field, including nested objects and typed lists. The same DTO class can carry both JSON and XML annotations, so a single object handles either format depending on the request's `Content-Type` header.
+
+## JSON Serialization with `#[JsonProperty]`
+
+Apply `#[JsonProperty]` to any property you want to bind from a JSON payload. The framework maps the external JSON key to the PHP property and performs type coercion automatically.
+
+```php src/Model/Product.php
+use dev\winterframework\stereotype\JsonProperty;
+
+class Product {
+
+    #[JsonProperty]                       // uses the property name "name" by default
+    private string $name;
+
+    #[JsonProperty(name: 'unit_price')]   // explicit external key
+    private float $price;
+
+    #[JsonProperty(required: true)]
+    private string $sku;
+
+    #[JsonProperty(name: 'tags', listClass: Tag::class)]
+    private array $tags = [];             // list of nested objects
+}
+```
+
+### `#[JsonProperty]` Options
+
+<ParamField body="name" type="string | array" default="property name">
+  The external JSON key name(s) to bind. Accepts a single string or an array of aliases — the first matching alias in the payload wins.
+</ParamField>
+
+<ParamField body="required" type="bool" default="false">
+  When `true`, an `InvalidSyntaxException` is thrown if the key is absent from the payload. Automatically set to `true` when the property has no default value and its type does not allow `null`.
+</ParamField>
+
+<ParamField body="nillable" type="bool" default="false">
+  Allows `null` values to be set on the property. Automatically set to `true` for nullable types (`?string`, etc.).
+</ParamField>
+
+<ParamField body="listClass" type="string" default='""'>
+  Fully qualified class name for the items when the property is a typed array. Each array element in the JSON payload is deserialized into the given class.
+</ParamField>
+
+<ParamField body="validate" type="array" default="[]">
+  An array of validator names or `[validatorName, ...options]` tuples applied to the property value after binding.
+</ParamField>
+
+### Explicit Deserialization with `ObjectCreator`
+
+Use `ObjectCreator::createObject()` to deserialize an associative array (e.g. the result of `json_decode(..., true)`) into a typed object:
+
+```php
+use dev\winterframework\reflection\ObjectCreator;
+
+$data = json_decode('{"name": "Pen", "unit_price": 2.01, "sku": "PEN-001"}', true);
+
+$product = ObjectCreator::createObject(Product::class, $data);
+
+echo $product->getName();  // "Pen"
+```
+
+### Automatic Binding in REST Controllers
+
+When a controller method parameter is annotated with `#[RequestBody]` and the request carries `Content-Type: application/json`, the framework calls `ObjectCreator::createObject()` for you:
+
+```php src/Controller/ProductController.php
+use dev\winterframework\web\rest\RestController;
+use dev\winterframework\web\RequestMapping;
+use dev\winterframework\web\RequestMethod;
+use dev\winterframework\web\MediaType;
+use dev\winterframework\web\RequestBody;
+use dev\winterframework\web\http\ResponseEntity;
+
+#[RestController]
+class ProductController {
+
+    #[RequestMapping(
+        path: '/api/v1/products',
+        method: [RequestMethod::POST],
+        consumes: [MediaType::APPLICATION_JSON]
+    )]
+    public function createProduct(
+        #[RequestBody] Product $product
+    ): ResponseEntity {
+        // $product is fully populated from the JSON request body
+        return ResponseEntity::ok()->withJson(['id' => 42]);
+    }
+}
+```
+
+---
+
+## XML Serialization with PAXB Attributes
+
+Winter Boot's PAXB (PHP Architecture for XML Binding) mirrors Java's JAXB, providing a set of attributes that describe how a class maps to an XML document. Annotate your class with `#[XmlRootElement]` and its properties with the appropriate XML attributes.
+
+```php src/Model/Product.php
+use dev\winterframework\paxb\attr\XmlRootElement;
+use dev\winterframework\paxb\attr\XmlElement;
+use dev\winterframework\paxb\attr\XmlAttribute;
+
+#[XmlRootElement(name: 'product')]
+class Product {
+
+    #[XmlAttribute(name: 'sku')]
+    private string $sku;
+
+    #[XmlElement(name: 'name')]
+    private string $name;
+
+    #[XmlElement(name: 'unit_price')]
+    private float $price;
+}
+```
+
+The class above maps to the following XML document:
+
+```xml
+<product sku="PEN-001">
+    <name>Pen</name>
+    <unit_price>2.01</unit_price>
+</product>
+```
+
+### XML Attribute Reference
+
+<Tabs>
+  <Tab title="#[XmlRootElement]">
+    <ParamField body="name" type="string" default="class short name">
+      The XML root element tag name. Place this attribute on the class itself.
+    </ParamField>
+  </Tab>
+  <Tab title="#[XmlElement]">
+    <ParamField body="name" type="string" default="property name">
+      The XML child element tag name for this property.
+    </ParamField>
+    <ParamField body="required" type="bool" default="false">
+      Throw a parse error if the element is missing from the document.
+    </ParamField>
+    <ParamField body="nillable" type="bool" default="false">
+      Allow the element to be absent or carry a `nil` attribute.
+    </ParamField>
+    <ParamField body="namespace" type="string" default='""'>
+      XML namespace URI for this element.
+    </ParamField>
+    <ParamField body="listClass" type="string" default='""'>
+      Fully qualified class name for repeated child elements of this type.
+    </ParamField>
+  </Tab>
+  <Tab title="#[XmlAttribute]">
+    <ParamField body="name" type="string" default="property name">
+      The XML attribute name. Supported property types: `int`, `bool`, `string`, `float`, `DateTime`, `DateTimeInterface`.
+    </ParamField>
+    <ParamField body="required" type="bool" default="false">
+      Throw a parse error if the attribute is absent from the element.
+    </ParamField>
+    <ParamField body="namespace" type="string" default='""'>
+      XML namespace URI for this attribute.
+    </ParamField>
+  </Tab>
+  <Tab title="#[XmlValue]">
+    Binds the text content of the enclosing element to the annotated property. Only one `#[XmlValue]` is allowed per class.
+  </Tab>
+</Tabs>
+
+### Additional XML Attributes
+
+<Accordion title="#[XmlAnyElement]">
+  Applied to a property, `#[XmlAnyElement]` captures any child elements not matched by other bindings. When `lax` is `true`, unknown elements are silently skipped rather than raising an error.
+</Accordion>
+
+<Accordion title="#[XmlAnyAttribute]">
+  Applied to a property, `#[XmlAnyAttribute]` captures any XML attributes not matched by other bindings into an array on the property.
+</Accordion>
+
+<Accordion title="#[XmlPropertyOrder]">
+  Applied to a class, `#[XmlPropertyOrder]` controls the serialisation order of child elements. The `order` parameter lists property names in the desired output order. Set `ignoreUnknown` to `true` to silently drop unrecognised elements during deserialization.
+</Accordion>
+
+### Explicit XML Deserialization
+
+Use `ObjectCreator::createObjectXml()` to parse an XML string directly into a typed object:
+
+```php
+use dev\winterframework\reflection\ObjectCreator;
+
+$xml = <<<XML
+<product sku="PEN-001">
+    <name>Pen</name>
+    <unit_price>2.01</unit_price>
+</product>
+XML;
+
+$product = ObjectCreator::createObjectXml(Product::class, $xml);
+```
+
+When you need finer control over parser properties, use `XmlObjectMapper` directly:
+
+```php
+use dev\winterframework\paxb\XmlObjectMapper;
+
+$mapper = new XmlObjectMapper();
+$mapper->setParserProperty(XMLReader::VALIDATE);
+$product = $mapper->readValue($xml, Product::class, validate: true);
+
+// Serialise back to an XML string
+$xmlString = $mapper->writeValue($product);
+```
+
+---
+
+## Complete Example — JSON + XML Model
+
+The same model class can carry both JSON and XML annotations, letting a single DTO deserialize from either format based on the incoming `Content-Type`.
+
+```php src/Model/Product.php
+use dev\winterframework\stereotype\JsonProperty;
+use dev\winterframework\paxb\attr\XmlRootElement;
+use dev\winterframework\paxb\attr\XmlElement;
+use dev\winterframework\paxb\attr\XmlAttribute;
+
+#[XmlRootElement(name: 'product')]
+class Product {
+
+    #[JsonProperty(name: 'sku')]
+    #[XmlAttribute(name: 'sku')]
+    private string $sku = '';
+
+    #[JsonProperty(name: 'name')]
+    #[XmlElement(name: 'name')]
+    private string $name = '';
+
+    #[JsonProperty(name: 'unit_price')]
+    #[XmlElement(name: 'unit_price')]
+    private float $price = 0.0;
+
+    #[JsonProperty(name: 'tags', listClass: Tag::class)]
+    #[XmlElement(name: 'tag', listClass: Tag::class)]
+    private array $tags = [];
+
+    public function getName(): string { return $this->name; }
+    public function getPrice(): float { return $this->price; }
+}
+```
+
+Declare both content types in your controller's `consumes` list and the framework handles the rest:
+
+```php src/Controller/ProductController.php
+#[RestController]
+class ProductController {
+
+    #[RequestMapping(
+        path: '/api/v1/products',
+        method: [RequestMethod::POST],
+        consumes: [MediaType::APPLICATION_JSON, MediaType::APPLICATION_XML]
+    )]
+    public function createProduct(
+        #[RequestBody] Product $product
+    ): ResponseEntity {
+        return ResponseEntity::created()->withJson([
+            'name'  => $product->getName(),
+            'price' => $product->getPrice(),
+        ]);
+    }
+}
+```
+
+<Note>
+  `#[JsonProperty]` and `#[XmlElement]` can coexist on the same property. The framework selects the correct deserializer based on the request's `Content-Type` header, so you only need one DTO class to serve both formats.
+</Note>

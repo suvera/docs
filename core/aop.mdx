@@ -1,0 +1,358 @@
+---
+title: "Aspect-Oriented Programming in Winter Boot"
+sidebarTitle: "AOP"
+description: "Apply cross-cutting concerns like transactions, caching, and access control to managed bean methods using PHP 8 attributes and Winter Boot's interceptor pipeline."
+---
+
+Aspect-Oriented Programming (AOP) lets you attach behaviour to method calls without modifying the method itself. In Winter Boot, AOP is expressed entirely through PHP 8 attributes. When the container detects an AOP attribute on a managed bean's method, it wraps that method with an interceptor chain. The original method body only runs if every interceptor in the chain allows it — making it trivial to enforce security checks, manage transactions, or add caching with a single attribute. All AOP contracts live in the `dev\winterframework\stereotype\aop\` namespace.
+
+## Built-in AOP attributes
+
+Winter Boot ships several ready-to-use AOP attributes. Enable the corresponding module in your `#[WinterBootApplication]` class before using any of them.
+
+<AccordionGroup>
+
+<Accordion title="#[Transactional]">
+
+Wraps the annotated method in a database transaction. The transaction commits when the method returns normally, or rolls back if an exception is thrown.
+
+```php OrderService.php
+use dev\winterframework\txn\stereotype\Transactional;
+
+#[Service]
+class OrderService {
+
+    #[Transactional]
+    public function createOrder(array $items): Order {
+        // All DB operations here run inside a single transaction
+    }
+}
+```
+
+<Note>
+  Requires `#[EnableTransactionManagement]` on your application class. See the
+  Transactions guide for full configuration.
+</Note>
+
+</Accordion>
+
+<Accordion title="#[Cacheable]">
+
+Caches the method's return value. Subsequent calls with the same arguments return the cached result without executing the method body.
+
+```php ProductCatalog.php
+use dev\winterframework\cache\stereotype\Cacheable;
+
+#[Service]
+class ProductCatalog {
+
+    #[Cacheable(cacheName: "products", key: "#id")]
+    public function findProduct(int $id): Product {
+        // Expensive DB lookup — only runs on cache miss
+    }
+}
+```
+
+<Note>
+  Requires `#[EnableCaching]` on your application class. See the Caching guide
+  for full configuration.
+</Note>
+
+</Accordion>
+
+<Accordion title="#[Lockable]">
+
+Acquires a distributed lock before the method body executes and releases it afterwards, preventing concurrent duplicate execution.
+
+```php InventoryService.php
+use dev\winterframework\stereotype\concurrent\Lockable;
+
+#[Service]
+class InventoryService {
+
+    #[Lockable(name: "inventory-update")]
+    public function adjustStock(int $productId, int $delta): void {
+        // Only one thread/process executes this at a time
+    }
+}
+```
+
+<Note>
+  See the Locking guide for configuration details.
+</Note>
+
+</Accordion>
+
+<Accordion title="#[Async]">
+
+Schedules the method to run asynchronously in a worker process. The caller returns immediately without waiting for the result.
+
+```php EmailService.php
+use dev\winterframework\task\async\stereotype\Async;
+
+#[Service]
+class EmailService {
+
+    #[Async]
+    public function sendWelcomeEmail(string $address): void {
+        // Runs in a background worker
+    }
+}
+```
+
+<Note>
+  Requires `#[EnableAsync]` on your application class. See the Async Tasks guide
+  for full configuration.
+</Note>
+
+</Accordion>
+
+<Accordion title="#[Scheduled]">
+
+Marks a method to be called on a fixed schedule. Supports fixed delay, fixed rate, and initial delay in milliseconds.
+
+```php ReportGenerator.php
+use dev\winterframework\task\scheduling\stereotype\Scheduled;
+
+#[Service]
+class ReportGenerator {
+
+    #[Scheduled(fixedRate: 60000, initialDelay: 5000)]
+    public function generateDailyReport(): void {
+        // Called every 60 seconds, first run after 5 seconds
+    }
+}
+```
+
+<Note>
+  Requires `#[EnableScheduling]` on your application class. See the Scheduling
+  guide for full configuration.
+</Note>
+
+</Accordion>
+
+<Accordion title="#[Traceable]">
+
+Instruments the method with distributed tracing spans, recording start time, duration, and any exceptions for observability tooling.
+
+```php CheckoutService.php
+#[Service]
+class CheckoutService {
+
+    #[Traceable]
+    public function processCheckout(Cart $cart): Receipt {
+        // A trace span is created around this call
+    }
+}
+```
+
+<Note>
+  See the Telemetry guide for full configuration.
+</Note>
+
+</Accordion>
+
+</AccordionGroup>
+
+---
+
+## Custom AOP attributes
+
+You can create your own AOP attributes using two components: an **attribute class** that implements `AopStereoType`, and an **interceptor class** that implements `WinterAspect`. Once both classes live in a scanned namespace, apply the attribute to any managed bean method.
+
+<Steps>
+
+### Create the attribute class
+
+Declare a PHP attribute class, annotate it with `#[StereoTyped]`, and implement the `AopStereoType` interface. The attribute class must implement two methods:
+
+- `isPerInstance(): bool` — return `true` if a new interceptor instance should be created per bean instance, or `false` for a shared stateless interceptor.
+- `getAspect(): WinterAspect` — return the interceptor object (lazily constructed).
+
+```php MustBeAdmin.php
+use Attribute;
+use dev\winterframework\stereotype\StereoTyped;
+use dev\winterframework\stereotype\aop\AopStereoType;
+use dev\winterframework\stereotype\aop\WinterAspect;
+use dev\winterframework\reflection\ref\RefMethod;
+use dev\winterframework\reflection\support\StereoTypeValidations;
+use dev\winterframework\type\TypeAssert;
+
+#[Attribute(Attribute::TARGET_METHOD)]
+#[StereoTyped]
+class MustBeAdmin implements AopStereoType {
+    use StereoTypeValidations;
+
+    private MustBeAdminInterceptor $interceptor;
+
+    public function isPerInstance(): bool {
+        return false; // shared stateless interceptor
+    }
+
+    public function getAspect(): WinterAspect {
+        if (!isset($this->interceptor)) {
+            $this->interceptor = new MustBeAdminInterceptor();
+        }
+        return $this->interceptor;
+    }
+
+    public function init(object $ref): void {
+        /** @var RefMethod $ref */
+        TypeAssert::typeOf($ref, RefMethod::class);
+        $this->validateAopMethod($ref, 'MustBeAdmin');
+    }
+}
+```
+
+<Tip>
+  When `isPerInstance()` returns `false`, the single interceptor instance is
+  shared across all beans that use this attribute. Return `true` only when the
+  interceptor needs to hold per-bean state.
+</Tip>
+
+### Create the interceptor class
+
+Implement `WinterAspect` with all five lifecycle methods. `AopContext` carries method reflection and the application context. `AopExecutionContext` carries the target object, arguments, and execution control handles.
+
+```php MustBeAdminInterceptor.php
+use dev\winterframework\stereotype\aop\WinterAspect;
+use dev\winterframework\stereotype\aop\AopContext;
+use dev\winterframework\core\aop\AopExecutionContext;
+use dev\winterframework\util\log\Wlf4p;
+use Throwable;
+
+class MustBeAdminInterceptor implements WinterAspect {
+    use Wlf4p;
+
+    public function begin(AopContext $ctx, AopExecutionContext $exCtx): void {
+        // Runs BEFORE the method body
+        $user = UserAuthenticationContext::currentLoggedInUser();
+
+        if (is_null($user) || !$user->isAdmin()) {
+            // Stop the method from executing and set the return value
+            $exCtx->stopExecution(null);
+            throw new AccessDeniedException('User is not an Admin');
+        }
+    }
+
+    public function beginFailed(
+        AopContext $ctx,
+        AopExecutionContext $exCtx,
+        Throwable $ex
+    ): void {
+        // Runs if begin() threw an exception
+        self::logError('MustBeAdmin begin failed for ' . $ctx->getMethod()->getName());
+    }
+
+    public function commit(
+        AopContext $ctx,
+        AopExecutionContext $exCtx,
+        mixed $result
+    ): void {
+        // Runs AFTER the method body succeeds — $result is the return value
+    }
+
+    public function commitFailed(
+        AopContext $ctx,
+        AopExecutionContext $exCtx,
+        mixed $result,
+        Throwable $ex
+    ): void {
+        // Runs if commit() threw an exception
+    }
+
+    public function failed(
+        AopContext $ctx,
+        AopExecutionContext $exCtx,
+        Throwable $ex
+    ): void {
+        // Runs if the method body threw an exception
+        self::logError('MustBeAdmin check failed: ' . $ex->getMessage());
+    }
+}
+```
+
+### Apply your custom attribute
+
+Once both classes are in a scanned namespace, apply the attribute to any managed bean method:
+
+```php AdminDashboard.php
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class AdminDashboard {
+
+    #[MustBeAdmin]
+    public function exportAllUsers(): array {
+        // This body only runs when the logged-in user is an Admin
+        return $this->userRepository->findAll();
+    }
+
+    #[MustBeAdmin]
+    public function deleteAccount(int $userId): void {
+        $this->userRepository->delete($userId);
+    }
+}
+```
+
+</Steps>
+
+---
+
+## WinterAspect lifecycle reference
+
+The five methods of `WinterAspect` form the interceptor pipeline around every method call. Each method fires at a distinct point in the execution flow.
+
+| Method | When it runs | Key use cases |
+|---|---|---|
+| `begin(ctx, exCtx)` | Before the method body | Authentication, acquiring locks, starting transactions |
+| `beginFailed(ctx, exCtx, ex)` | When `begin()` throws | Logging, cleanup after a failed pre-check |
+| `commit(ctx, exCtx, result)` | After the method body succeeds | Caching the result, committing transactions |
+| `commitFailed(ctx, exCtx, result, ex)` | When `commit()` throws | Rolling back a partial commit |
+| `failed(ctx, exCtx, ex)` | When the method body throws | Rolling back transactions, releasing locks, logging errors |
+
+---
+
+## AopExecutionContext — execution control
+
+`AopExecutionContext` gives an interceptor full control over whether the method body runs and what value the caller receives.
+
+```php AopExecutionContext usage
+// Stop the method from executing; supply the value the caller will receive
+$exCtx->stopExecution(null);
+
+// Retrieve the arguments the original method was called with
+$args = $exCtx->getArguments();
+
+// Retrieve the bean instance the method belongs to
+$bean = $exCtx->getObject();
+
+// Store and retrieve custom variables shared across the pipeline phases
+$exCtx->setVariable('txId', $transactionId);
+$txId = $exCtx->getVariable('txId');
+```
+
+<Tip>
+  Use `setVariable` / `getVariable` to pass state between `begin()` and
+  `commit()` or `failed()` — for example, storing a transaction ID in `begin()`
+  and committing or rolling it back in `commit()` / `failed()`.
+</Tip>
+
+---
+
+## AopContext — method reflection
+
+`AopContext` carries the reflection metadata for the intercepted method call, giving you access to the method name, the attribute instance, and the full application context.
+
+```php AopContext usage
+// Full reflection object for the intercepted method
+$method = $ctx->getMethod();             // RefMethod
+$name   = $ctx->getMethod()->getName();  // e.g. "exportAllUsers"
+
+// The AOP attribute instance (your custom attribute class)
+$attr = $ctx->getStereoType();
+
+// The application context — access any bean from within the interceptor
+$appCtx = $ctx->getApplicationContext();
+$repo   = $appCtx->beanByClass(UserRepository::class);
+```

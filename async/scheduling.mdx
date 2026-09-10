@@ -1,0 +1,233 @@
+---
+title: "Schedule Recurring Tasks with Cron Expressions"
+sidebarTitle: "Scheduling"
+description: "Declare recurring background tasks directly in PHP using #[Scheduled]. Run on fixed intervals or fixed delays without external cron jobs or process managers."
+---
+
+Winter Boot's scheduling system lets you declare recurring tasks directly on service or component bean methods using the `#[Scheduled]` attribute. Rather than managing cron jobs externally, you embed timing logic inside your application code, and the framework handles process lifecycle and execution. Scheduled tasks run inside a **dedicated worker process** separate from the HTTP workers — this means a slow or long-running task never blocks web request handling. All you need is the Swoole extension and a single annotation on your application class to activate the feature.
+
+## Prerequisites
+
+Scheduling is powered by the [Swoole](https://openswoole.com/) PHP extension. Install and enable it before using `#[Scheduled]`.
+
+<Steps>
+  <Step title="Install the Swoole extension">
+    ```bash
+    pecl install swoole
+    ```
+  </Step>
+  <Step title="Enable Swoole in php.ini">
+    ```ini
+    extension=swoole.so
+    ```
+  </Step>
+</Steps>
+
+## Enable Scheduling on Your Application Class
+
+Add `#[EnableScheduling]` to your `#[WinterBootApplication]` class. The framework validates at startup that `#[WinterBootApplication]` is also present and that Swoole is loaded — a `TypeError` or `AnnotationException` is raised if either condition is not met.
+
+```php MyApplication.php
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\stereotype\task\EnableScheduling;
+use dev\winterframework\web\WinterWebSwooleApplication;
+
+#[WinterBootApplication(scanPackages: ['com\example'])]
+#[EnableScheduling]
+class MyApplication
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(self::class);
+    }
+}
+```
+
+## The `#[Scheduled]` Attribute
+
+Place `#[Scheduled]` on any `public`, non-final, non-abstract, zero-argument `void` method on a `#[Service]` or `#[Component]` bean. You must supply exactly one of the interval parameters (`fixedDelay` or `fixedRate`); combining conflicting options throws an `AnnotationException` at boot.
+
+<Warning>
+  All integer timing values must be **positive**. Passing zero or a negative number raises a `ValueError` at boot time.
+</Warning>
+
+### Parameters
+
+<ParamField body="fixedDelay" type="int">
+  Seconds to wait **after** the previous execution completes before starting the next. Use this when you want to avoid overlapping runs and the task duration may vary.
+</ParamField>
+
+<ParamField body="fixedDelayString" type="string">
+  Property placeholder (e.g. `${my.delay}`) that resolves to the `fixedDelay` value from your application configuration.
+</ParamField>
+
+<ParamField body="fixedRate" type="int">
+  Seconds between the **start** of successive executions, regardless of how long each run takes. Use this when you need a consistent heartbeat.
+</ParamField>
+
+<ParamField body="fixedRateString" type="string">
+  Property placeholder resolving to the `fixedRate` value from your application configuration.
+</ParamField>
+
+<ParamField body="initialDelay" type="int">
+  Seconds to wait after application startup before the first execution fires.
+</ParamField>
+
+<ParamField body="initialDelayString" type="string">
+  Property placeholder resolving to the `initialDelay` value from your application configuration.
+</ParamField>
+
+## Fixed Delay vs. Fixed Rate
+
+The two core scheduling modes behave differently when a task takes longer than its interval. Choose the one that matches your task's requirements.
+
+<Tabs>
+  <Tab title="fixedDelay">
+    `fixedDelay` introduces a gap between the **end** of one execution and the **start** of the next. Use this when you want to avoid overlapping runs and the task duration may vary.
+
+    ```php CacheWarmer.php
+    use dev\winterframework\stereotype\Component;
+    use dev\winterframework\task\scheduling\stereotype\Scheduled;
+
+    #[Component]
+    class CacheWarmer
+    {
+        #[Scheduled(fixedDelay: 60, initialDelay: 10)]
+        public function refreshCache(): void
+        {
+            // Runs 10 seconds after startup, then again 60 seconds after
+            // each completion.
+            echo 'Cache refreshed at ' . date('H:i:s') . PHP_EOL;
+        }
+    }
+    ```
+
+    **Timeline:** `[startup] → 10s delay → run → 60s delay → run → 60s delay → run → …`
+  </Tab>
+  <Tab title="fixedRate">
+    `fixedRate` fires the method every N seconds counted from the **start** of the previous invocation. Use this when you need a consistent heartbeat regardless of individual run time.
+
+    ```php HealthReporter.php
+    use dev\winterframework\stereotype\Component;
+    use dev\winterframework\task\scheduling\stereotype\Scheduled;
+
+    #[Component]
+    class HealthReporter
+    {
+        #[Scheduled(fixedRate: 30)]
+        public function reportHealthMetrics(): void
+        {
+            // Fires every 30 seconds from the previous start time.
+            echo 'Health check at ' . date('H:i:s') . ' — PID: ' . getmypid() . PHP_EOL;
+        }
+    }
+    ```
+
+    **Timeline:** `[startup] → run starts → 30s → run starts → 30s → run starts → …`
+  </Tab>
+</Tabs>
+
+## Externalise Timing with Property Placeholders
+
+Timing values can be externalised to `application.yml` using the `String` variants of each parameter. This lets you adjust schedules per environment without redeploying code.
+
+```yaml application.yml
+app:
+  scheduler:
+    reportDelay: 45
+```
+
+```php SomeScheduler.php
+#[Component]
+class SomeScheduler
+{
+    #[Scheduled(fixedDelayString: '${app.scheduler.reportDelay}', initialDelay: 5)]
+    public function someScheduledMethodName(): void
+    {
+        echo 'I generate a unique ID every ' . getenv('app.scheduler.reportDelay') . ' seconds: ' . uniqid();
+    }
+}
+```
+
+<Tip>
+  Use property placeholders for delays in production-facing applications. You can tune scheduling intervals per environment (dev, staging, prod) via separate `application.yml` profiles without touching PHP source code.
+</Tip>
+
+## Configuration
+
+Configure the scheduling worker pool in `application.yml` under `winter.task.scheduling`:
+
+```yaml application.yml
+winter:
+  task:
+    scheduling:
+      poolSize: 1        # Number of dedicated scheduling worker processes
+      queueCapacity: 50  # Maximum concurrent scheduled requests that can be queued
+```
+
+<ResponseField name="poolSize" type="int">
+  Total number of worker processes dedicated to executing scheduled tasks.
+</ResponseField>
+<ResponseField name="queueCapacity" type="int">
+  Maximum number of concurrent scheduled task invocations that can be queued at once.
+</ResponseField>
+
+<Note>
+  Scheduled tasks run inside a **separate worker process** managed by Swoole. They are entirely non-blocking with respect to incoming HTTP requests — web workers and scheduling workers never share execution time.
+</Note>
+
+## Complete Example
+
+The following files show a full scheduling setup: the application entry point and a scheduler component with two differently-timed tasks.
+
+<CodeGroup>
+
+```php MyApplication.php
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\stereotype\task\EnableScheduling;
+use dev\winterframework\web\WinterWebSwooleApplication;
+
+#[WinterBootApplication(scanPackages: ['com\example'])]
+#[EnableScheduling]
+class MyApplication
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(self::class);
+    }
+}
+```
+
+```php SomeScheduler.php
+use dev\winterframework\stereotype\Component;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\task\scheduling\stereotype\Scheduled;
+
+#[Component]
+class SomeScheduler
+{
+    #[Autowired]
+    private ReportRepository $reportRepository;
+
+    /**
+     * Generates a unique ID 10 seconds after startup,
+     * then every 20 seconds after each completion.
+     */
+    #[Scheduled(fixedDelay: 20, initialDelay: 10)]
+    public function someScheduledMethodName(): void
+    {
+        echo 'I generate a unique ID every 20 seconds: ' . uniqid();
+    }
+
+    /**
+     * Persists a daily summary on a 24-hour fixed rate.
+     */
+    #[Scheduled(fixedRate: 86400, initialDelay: 60)]
+    public function persistDailySummary(): void
+    {
+        $this->reportRepository->saveDailySummary(date('Y-m-d'));
+    }
+}
+```
+
+</CodeGroup>

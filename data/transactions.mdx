@@ -1,0 +1,253 @@
+---
+title: "Manage Database Transactions Declaratively"
+sidebarTitle: "Transactions"
+description: "Use #[Transactional] annotations or PlatformTransactionManager to control commit, rollback, propagation, and isolation in Winter Boot services."
+---
+
+Winter Boot supports two complementary approaches to transaction management. **Declarative** transactions use the `#[Transactional]` method annotation — the framework wraps the method in a transaction automatically, handling commit and rollback with no extra code in your business logic. **Programmatic** transactions give you fine-grained control via `PlatformTransactionManager`, which is useful when transaction boundaries cannot be expressed as a single method call or when you need to interact with dynamically-resolved data sources such as in multi-tenant scenarios.
+
+## Enabling Transaction Management
+
+Before using either approach, add `#[EnableTransactionManagement]` to your application entry-point class. Without this annotation, the transaction infrastructure is not bootstrapped.
+
+```php MyApplication.php
+use dev\winterframework\stereotype\Application;
+use dev\winterframework\txn\stereotype\EnableTransactionManagement;
+use dev\winterframework\web\WinterWebApplication;
+
+#[EnableTransactionManagement]
+#[Application]
+class MyApplication {
+    public static function main(): void {
+        (new WinterWebApplication())->run(MyApplication::class);
+    }
+}
+```
+
+<Warning>
+  Transaction management is opt-in. If you omit `#[EnableTransactionManagement]`, `#[Transactional]` annotations are silently ignored and no transaction managers are registered.
+</Warning>
+
+---
+
+## Declarative Transactions with #[Transactional]
+
+Annotate any service or component method with `#[Transactional]` to have the framework begin a transaction before the method runs, commit it on success, or roll it back on any uncaught exception.
+
+<Tabs>
+  <Tab title="Primary Datasource">
+    ```php PaymentService.php
+    use dev\winterframework\stereotype\Service;
+    use dev\winterframework\txn\stereotype\Transactional;
+
+    #[Service]
+    class PaymentService {
+
+        #[Transactional]
+        public function processPayment(int $orderId, float $amount): void {
+            // All database operations here run inside a single transaction.
+            // Any uncaught exception triggers an automatic rollback.
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Named Datasource">
+    ```php AdminService.php
+    use dev\winterframework\stereotype\Service;
+    use dev\winterframework\txn\stereotype\Transactional;
+
+    #[Service]
+    class AdminService {
+
+        // Targets the "admindb" datasource's transaction manager
+        #[Transactional("admindb-txn")]
+        public function auditAction(string $action): void {
+            // Runs inside a transaction on admindb
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Custom Transaction Manager">
+    ```php WalletService.php
+    use dev\winterframework\stereotype\Service;
+    use dev\winterframework\txn\stereotype\Transactional;
+
+    #[Service]
+    class WalletService {
+
+        #[Transactional(transactionManager: "myTxnMgr")]
+        public function withdrawMoney(float $amount): void {
+            // Runs under the custom transaction manager bean "myTxnMgr"
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  The `-txn` suffix follows Winter Boot's automatic bean-naming convention. For each datasource named `<name>`, the framework registers a transaction manager bean as `<name>-txn`. You only need the suffix when targeting a **non-primary** datasource. For the primary datasource, plain `#[Transactional]` is sufficient.
+</Tip>
+
+### #[Transactional] Options
+
+<ParamField body="transactionManager" type="string" default="default">
+  Bean name of the `PlatformTransactionManager` to use. Defaults to the primary datasource's transaction manager.
+</ParamField>
+
+<ParamField body="propagation" type="int" default="PROPAGATION_REQUIRED">
+  Transaction propagation behaviour. See the propagation constants table below.
+</ParamField>
+
+<ParamField body="isolation" type="int" default="ISOLATION_DEFAULT">
+  Database isolation level to request from the driver.
+</ParamField>
+
+<ParamField body="timeout" type="int" default="TIMEOUT_DEFAULT">
+  Transaction timeout in seconds. `-1` means use the driver default.
+</ParamField>
+
+<ParamField body="readOnly" type="bool" default="false">
+  Mark the transaction as read-only. A rollback is performed at the end instead of a commit.
+</ParamField>
+
+<ParamField body="rollbackFor" type="array" default="all exceptions">
+  Array of exception class names that must trigger a rollback.
+</ParamField>
+
+<ParamField body="noRollbackFor" type="array" default="none">
+  Array of exception class names that must **not** trigger a rollback.
+</ParamField>
+
+<ParamField body="label" type="array" default="[]">
+  Arbitrary string labels to associate with the transaction for informational purposes.
+</ParamField>
+
+### Propagation Constants
+
+| Constant | Value | Behaviour |
+|---|---|---|
+| `PROPAGATION_REQUIRED` | `0` | Use the current transaction, or create a new one if none exists *(default)* |
+| `PROPAGATION_SUPPORTS` | `1` | Use the current transaction if one exists; otherwise run non-transactionally |
+| `PROPAGATION_MANDATORY` | `2` | Use the current transaction; throw an exception if none exists |
+| `PROPAGATION_REQUIRES_NEW` | `3` | Always create a new transaction, suspending any existing one |
+| `PROPAGATION_NOT_SUPPORTED` | `4` | Always run non-transactionally, suspending any existing transaction |
+| `PROPAGATION_NEVER` | `5` | Run non-transactionally; throw an exception if a transaction exists |
+| `PROPAGATION_NESTED` | `6` | Run within a nested transaction if one exists; falls back to `PROPAGATION_REQUIRED` — **not supported by PDO drivers** |
+
+---
+
+## Programmatic Transaction Management
+
+`PlatformTransactionManager` gives you direct control over the transaction lifecycle. Inject it with `#[Autowired]` for the primary datasource, or by bean name for a named datasource, then call `getTransaction()`, `commit()`, and `rollback()` yourself.
+
+### PlatformTransactionManager Methods
+
+<ResponseField name="getTransaction(TransactionDefinition $definition)" type="TransactionStatus">
+  Begin or join a transaction according to the given definition.
+</ResponseField>
+
+<ResponseField name="commit(TransactionStatus $status)" type="void">
+  Commit the transaction represented by `$status`.
+</ResponseField>
+
+<ResponseField name="rollback(TransactionStatus $status)" type="void">
+  Roll back the transaction represented by `$status`.
+</ResponseField>
+
+### Configuring a TransactionDefinition
+
+`DefaultTransactionDefinition` is the standard implementation of `TransactionDefinition`. Configure it before calling `getTransaction()`:
+
+```php
+use dev\winterframework\txn\support\DefaultTransactionDefinition;
+use dev\winterframework\txn\Transaction;
+
+$def = new DefaultTransactionDefinition();
+$def->setPropagationBehavior(Transaction::PROPAGATION_REQUIRES_NEW);
+$def->setIsolationLevel(Transaction::ISOLATION_READ_COMMITTED);
+$def->setReadOnly(false);
+$def->setTimeout(30);
+```
+
+### Complete Programmatic Example
+
+The following service shows the full try/commit/catch/rollback pattern using an injected `PlatformTransactionManager`:
+
+```php UserService.php
+use dev\winterframework\pdbc\ex\EmptyResultDataAccessException;
+use dev\winterframework\pdbc\PdbcTemplate;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Service;
+use dev\winterframework\txn\PlatformTransactionManager;
+use dev\winterframework\txn\support\DefaultTransactionDefinition;
+use dev\winterframework\util\log\Wlf4p;
+
+#[Service]
+class UserService {
+    use Wlf4p;
+
+    #[Autowired]
+    private PdbcTemplate $pdbc;
+
+    #[Autowired]
+    private PlatformTransactionManager $txnMgr;
+
+    public function createUser(User $user): User {
+        $status = $this->txnMgr->getTransaction(new DefaultTransactionDefinition());
+        try {
+            $sql = "INSERT INTO users (name, email, age) VALUES (:name, :email, :age) RETURNING id";
+            $ret = [];
+            $result = $this->pdbc->update($sql, [
+                'name'  => $user->getName(),
+                'email' => $user->getEmail(),
+                'age'   => $user->getAge(),
+            ], [], $ret);
+
+            if ($result) {
+                $user->setId(intval($ret['id']));
+            }
+
+            $this->txnMgr->commit($status);
+            return $user;
+        } catch (\Throwable $e) {
+            $this->txnMgr->rollback($status);
+            throw $e;
+        }
+    }
+
+    public function findById(int $id): ?User {
+        try {
+            return $this->pdbc->queryForObject(
+                "SELECT * FROM users WHERE id = :id",
+                ['id' => $id],
+                User::class
+            );
+        } catch (EmptyResultDataAccessException) {
+            return null;
+        }
+    }
+}
+```
+
+---
+
+## PDO Nested Transaction Limitation
+
+PDO does not natively support nested (savepoint-based) transactions. `PROPAGATION_NESTED` is defined in the `Transaction` interface but falls back to `PROPAGATION_REQUIRED` behaviour when used with PDO-backed data sources.
+
+<Note>
+  If you require true nested transaction semantics, implement a custom `PlatformTransactionManager` using a driver that supports savepoints and register it as a named bean.
+</Note>
+
+---
+
+## Choosing an Approach
+
+<CardGroup cols={2}>
+  <Card title="Declarative (#[Transactional])" icon="tag">
+    Best for service-layer methods with straightforward, single-method transaction boundaries. Zero boilerplate — commit and rollback happen automatically based on whether the method throws.
+  </Card>
+  <Card title="Programmatic (PlatformTransactionManager)" icon="code">
+    Best when transaction scope spans multiple methods, when you need conditional commits, or when working with multi-tenant dynamic data sources where the transaction manager is resolved at runtime.
+  </Card>
+</CardGroup>

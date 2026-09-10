@@ -1,0 +1,146 @@
+---
+title: "Winter Boot: PHP Microservices Framework"
+sidebarTitle: "Introduction"
+description: "Winter Boot is a modern PHP 8 framework for microservices, inspired by Spring Boot, using attributes for DI, AOP, REST routing, async tasks, and more."
+---
+
+Winter Boot is a modern PHP framework purpose-built for microservice development, drawing deep inspiration from Spring Boot's philosophy of convention over configuration. It brings first-class support for PHP 8 attributes to deliver a declarative, annotation-driven programming model — covering dependency injection, AOP-based cross-cutting concerns, REST API routing, async task execution, caching, transactions, and scheduling — so that teams already familiar with the Java/Spring ecosystem can be productive in PHP immediately.
+
+## What is Winter Boot?
+
+Winter Boot turns a plain PHP class into a fully managed application context with a single attribute. The framework scans your namespaces at startup, registers beans, wires dependencies, maps HTTP routes via Swoole, and exposes every cross-cutting concern through attributes rather than boilerplate configuration files. The result is lean, readable service code that focuses on business logic instead of framework plumbing.
+
+```php Application.php
+<?php
+
+use dev\winterframework\stereotype\WinterBootApplication;
+use dev\winterframework\core\app\WinterWebSwooleApplication;
+
+#[WinterBootApplication(
+    configDirectory: [__DIR__ . '/config'],
+    scanNamespaces: [['com\\example\\myapp', __DIR__ . '/src']]
+)]
+class MyApplication
+{
+    public static function main(): void
+    {
+        (new WinterWebSwooleApplication())->run(MyApplication::class);
+    }
+}
+
+MyApplication::main();
+```
+
+<Note>
+  Winter Boot requires **PHP 8.4 or later**. The Swoole extension (`pecl install swoole`) is required for the built-in HTTP server (`WinterWebSwooleApplication`) and is strongly recommended for async functions (`#[Async]`) and scheduled tasks (`#[Scheduled]`). All other framework features work without Swoole.
+</Note>
+
+## Key Features
+
+Explore what Winter Boot can do for your microservices project.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the package, write your first service and REST controller, and have a running HTTP server in minutes.
+  </Card>
+  <Card title="Dependency Injection" icon="sitemap" href="/core/dependency-injection">
+    Attribute-driven DI with `#[Service]`, `#[Component]`, `#[Autowired]`, `#[Qualifier]`, and `#[Bean]` factories.
+  </Card>
+  <Card title="REST Controllers" icon="globe" href="/web/rest-controllers">
+    Map HTTP routes with `#[RestController]`, `#[RequestMapping]`, `#[GetMapping]`, `#[PostMapping]`, and more.
+  </Card>
+  <Card title="AOP & Custom Stereotypes" icon="layer-group" href="/core/aop">
+    Implement cross-cutting concerns with custom attributes and aspect-oriented interceptors.
+  </Card>
+  <Card title="Databases & Transactions" icon="database" href="/data/database">
+    Manage datasources, run SQL migrations, and control transactions declaratively with `#[Transactional]`.
+  </Card>
+  <Card title="Caching" icon="bolt" href="/ops/caching">
+    Add response and method-level caching with a single attribute, backed by any cache provider.
+  </Card>
+  <Card title="Async & Scheduling" icon="clock" href="/async/async-tasks">
+    Run background work with `#[Async]` and cron-style scheduling with `#[Scheduled]`.
+  </Card>
+  <Card title="Modules & Extensions" icon="puzzle-piece" href="/advanced/modules">
+    Extend the framework with community modules or build your own by implementing `WinterModule`.
+  </Card>
+</CardGroup>
+
+## Requirements
+
+Before you install Winter Boot, make sure your environment meets these prerequisites.
+
+| Requirement | Version / Notes |
+|---|---|
+| PHP | 8.4 or later |
+| Swoole extension | Required for HTTP server, `#[Async]`, and `#[Scheduled]` |
+| Composer | Any recent version |
+
+Install the Swoole extension via PECL:
+
+```bash
+pecl install swoole
+```
+
+Confirm both PHP and Swoole are available:
+
+```bash
+php -v
+php -r "echo phpversion('swoole');"
+```
+
+## Spring Boot Inspiration
+
+If you have built services with Spring Boot, Winter Boot will feel immediately familiar. Stereotype attributes map directly to their Spring counterparts — only the language changes.
+
+| Spring Boot (Java) | Winter Boot (PHP) |
+|---|---|
+| `@SpringBootApplication` | `#[WinterBootApplication]` |
+| `@Service` | `#[Service]` |
+| `@Component` | `#[Component]` |
+| `@RestController` | `#[RestController]` |
+| `@Autowired` | `#[Autowired]` |
+| `@Value` | `#[Value]` |
+| `@Configuration` | `#[Configuration]` |
+| `@Bean` | `#[Bean]` |
+| `@Transactional` | `#[Transactional]` |
+| `@Cacheable` | `#[Cacheable]` |
+| `@Async` | `#[Async]` |
+| `@Scheduled` | `#[Scheduled]` |
+
+The application context lifecycle, property externalisation via `application.yml`, and the concept of a single annotated entry-point class all follow the same patterns as Spring Boot.
+
+## PHP 8 Attributes and Dependency Injection
+
+Winter Boot's DI container is built entirely on native PHP 8 attributes. There are no XML files, no code-generation steps, and no service locators to call manually. Declare a class with `#[Service]` or `#[Component]`, mark a property with `#[Autowired]`, and the container resolves the dependency graph automatically at startup.
+
+```php src/UserServiceImpl.php
+<?php
+
+use dev\winterframework\stereotype\Service;
+use dev\winterframework\stereotype\Autowired;
+
+#[Service]
+class UserServiceImpl implements UserService
+{
+    #[Autowired]
+    private UserRepository $repository;
+
+    public function findById(int $id): User
+    {
+        return $this->repository->findById($id);
+    }
+}
+```
+
+## Aspect-Oriented Programming
+
+Cross-cutting concerns such as caching, transactions, retries, and custom interceptors are expressed as attributes applied to methods and classes. The AOP weaving happens at container startup — no proxy code to write, no separate aspect files to maintain.
+
+<Tip>
+  See the [AOP & Custom Stereotypes](/core/aop) page for a full walkthrough of defining aspects, join points, and custom stereotype attributes.
+</Tip>
+
+## Microservices Focus
+
+Winter Boot is optimised for the microservice deployment model: stateless HTTP workers managed by Swoole, an optional in-process key-value store and task queue, built-in Prometheus metrics via the Actuator, and an extensible module system for integrations with Redis, Kafka, Doctrine ORM, Amazon SQS/S3, OpenSearch, and service-discovery solutions such as Consul and Netflix Eureka.

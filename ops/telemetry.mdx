@@ -1,0 +1,243 @@
+---
+title: "Distributed Tracing and Telemetry Integration"
+sidebarTitle: "Telemetry"
+description: "Integrate OpenTelemetry into Winter Boot to capture distributed traces, increment metrics counters, and emit correlated structured logs with minimal configuration."
+---
+
+Winter Boot provides first-class integration with OpenTelemetry (OTel), covering all three observability pillars: **distributed traces**, **metrics**, and **structured logs**. The integration is delivered as an optional module (`OpenTelemetryModule`) so it has zero overhead when disabled. Once enabled, you can instrument web requests automatically via an interceptor, annotate individual methods for fine-grained tracing or counting, and inject telemetry beans anywhere in your application.
+
+## Prerequisites
+
+Complete all four setup steps before enabling the module.
+
+<Steps>
+
+<Step title="Install the PHP OpenTelemetry extension">
+
+```bash
+pecl install opentelemetry
+```
+
+Then enable it in your `php.ini`:
+
+```ini php.ini
+extension=opentelemetry.so
+```
+
+<Warning>
+If the extension is not loaded, `OpenTelemetryModule` will throw a `MissingExtensionException` at application startup.
+</Warning>
+
+</Step>
+
+<Step title="Install the Composer packages">
+
+```bash
+composer require open-telemetry/sdk \
+    open-telemetry/exporter-otlp \
+    open-telemetry/transport-grpc
+```
+
+</Step>
+
+<Step title="Enable the module in application.yml">
+
+```yaml application.yml
+modules:
+    -   module: 'dev\winterframework\telemetry\OpenTelemetryModule'
+        enabled: true
+        configFile: /path/to/opentelemetry.yaml
+```
+
+</Step>
+
+<Step title="Create opentelemetry.yaml">
+
+```yaml opentelemetry.yaml
+winter:
+    telemetry:
+        serviceName: 'my-winter-application'
+        exporter:
+            type: 'otlp'
+            endpoint: 'http://localhost:4317'
+        sampler:
+            type: 'parent_based_always_on'
+            ratio: 1.0
+```
+
+Key configuration fields:
+
+<ResponseField name="serviceName" type="string" required>
+  Identifies this service in your observability backend (Jaeger, Tempo, etc.).
+</ResponseField>
+
+<ResponseField name="exporter.type" type="string" required>
+  Export protocol — `otlp` (gRPC/HTTP), `zipkin`, `jaeger`, or `console`.
+</ResponseField>
+
+<ResponseField name="exporter.endpoint" type="string" required>
+  The OTel collector or backend endpoint URL.
+</ResponseField>
+
+<ResponseField name="sampler.type" type="string" default="parent_based_always_on">
+  Sampling strategy — `always_on`, `always_off`, `parent_based_always_on`, or `traceidratio`.
+</ResponseField>
+
+<ResponseField name="sampler.ratio" type="float" default="1.0">
+  Sampling ratio (0.0–1.0) used when the `traceidratio` sampler is selected.
+</ResponseField>
+
+</Step>
+
+</Steps>
+
+## Web Request Tracing
+
+Register `OpenTelemetryWebInterceptor` in your `WebMvcConfigurer` to automatically create a span for every incoming HTTP request. The interceptor extracts the W3C Trace Context from request headers (enabling distributed trace propagation from upstream services), records the HTTP method, URL, and response status code, and closes the span — including exception recording — after the response is sent.
+
+```php MyWebConfigurer.php
+use dev\winterframework\telemetry\web\OpenTelemetryWebInterceptor;
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\web\config\WebMvcConfigurer;
+use dev\winterframework\web\config\InterceptorRegistry;
+
+#[Configuration]
+class MyWebConfigurer implements WebMvcConfigurer
+{
+    public function addInterceptors(InterceptorRegistry $registry): void
+    {
+        // Trace all incoming HTTP requests
+        $registry->addInterceptor(new OpenTelemetryWebInterceptor(), '.*');
+    }
+}
+```
+
+## Traces, Metrics, and Logs
+
+<Tabs>
+
+<Tab title="Traces — #[Traceable]">
+
+Annotate any public bean method with `#[Traceable]` to have Winter Boot automatically create an OTel span around that method's execution. The span is named after the method by default; override the name via the `name` argument. Exceptions are recorded on the span and the span status is set to `ERROR` automatically.
+
+```php OrderService.php
+use dev\winterframework\telemetry\stereotype\Traceable;
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class OrderService
+{
+    #[Traceable]
+    public function processOrder(int $orderId): void
+    {
+        // Execution is wrapped in an OTel span named after this method.
+    }
+
+    #[Traceable(name: 'charge-customer')]
+    public function chargeCustomer(int $orderId, float $amount): void
+    {
+        // Span will be reported as "charge-customer".
+    }
+}
+```
+
+</Tab>
+
+<Tab title="Metrics — #[Countable]">
+
+Use `#[Countable]` to increment an OTel counter metric every time a method is invoked. For arbitrary numeric measurements such as latency or queue depth, inject `OpenTelemetryMetrics` directly.
+
+```php PaymentService.php
+use dev\winterframework\telemetry\metrics\Countable;
+use dev\winterframework\telemetry\metrics\OpenTelemetryMetrics;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class PaymentService
+{
+    #[Autowired]
+    private OpenTelemetryMetrics $metrics;
+
+    // Automatically increments the "payments.processed" counter by 1 on each call.
+    #[Countable(name: 'payments.processed', value: 1)]
+    public function processPayment(float $amount): void
+    {
+        // Payment processing logic…
+    }
+
+    public function recordLatency(float $durationMs): void
+    {
+        // Record an arbitrary measurement with tags.
+        $this->metrics->record(
+            'payment.latency',
+            $durationMs,
+            ['currency' => 'USD']
+        );
+    }
+}
+```
+
+**`#[Countable]` options:**
+
+<ResponseField name="name" type="string" default='"method.invocations"'>
+  The OTel counter metric name.
+</ResponseField>
+
+<ResponseField name="value" type="int|float" default="1">
+  The amount added to the counter on each invocation.
+</ResponseField>
+
+**`OpenTelemetryMetrics` methods:**
+
+| Method | Description |
+|---|---|
+| `add(string $name, int\|float $value, array $attributes = [])` | Increments a named counter by `$value`. |
+| `record(string $name, int\|float $value, array $attributes = [])` | Records a value on a named histogram (e.g. latency, queue depth). |
+| `counter(string $name, string $description = '', string $unit = '')` | Returns the raw `CounterInterface` for the named counter. |
+| `histogram(string $name, string $description = '', string $unit = '')` | Returns the raw `HistogramInterface` for the named histogram. |
+
+</Tab>
+
+<Tab title="Logs — OpenTelemetryLogs">
+
+`OpenTelemetryLogs` is automatically registered as a bean by `OpenTelemetryModule`. Inject it into any service to emit structured log records through the OTel Logs API, which can be correlated with active trace spans in your observability backend.
+
+```php AuditService.php
+use dev\winterframework\telemetry\logs\OpenTelemetryLogs;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Service;
+
+#[Service]
+class AuditService
+{
+    #[Autowired]
+    private OpenTelemetryLogs $logs;
+
+    public function auditAction(string $userId, string $action): void
+    {
+        $this->logs->info('User action performed', [
+            'userId' => $userId,
+            'action' => $action,
+        ]);
+    }
+}
+```
+
+**Available methods:**
+
+| Method | Severity |
+|---|---|
+| `info(string $message, array $attributes = [])` | `INFO` |
+| `error(string $message, array $attributes = [])` | `ERROR` |
+| `warn(string $message, array $attributes = [])` | `WARN` |
+| `debug(string $message, array $attributes = [])` | `DEBUG` |
+| `emit(string $message, Severity $severity, array $attributes = [])` | Custom — use any `Severity` constant |
+
+</Tab>
+
+</Tabs>
+
+<Note>
+Both `OpenTelemetryLogs` and `OpenTelemetryMetrics` are registered as **singleton beans** — you can `#[Autowired]` them in any component without additional configuration.
+</Note>

@@ -1,0 +1,181 @@
+Daemon Thread Background Processes in Winter Boot PHP - Winter Boot
+
+Async & Scheduling
+
+# Daemon Thread Background Processes in Winter Boot PHP
+
+Run supervised background processes in Winter Boot using #[DaemonThread]. Framework automatically restarts daemons on crash or out-of-memory error.
+
+> ## Documentation Index
+> 
+> Fetch the complete documentation index at: https://mintlify.com/suvera/winter-boot/llms.txt
+
+A **Daemon Thread** in Winter Boot is a long-running background process that starts with your application and keeps running for its entire lifetime. Despite the name, it is not an OS thread or a Java-style thread — it is a dedicated Swoole child process supervised by the framework. Daemon threads are the right tool for work that must always be running: polling a queue, tailing a log stream, monitoring external systems, or processing rows from a database table in a continuous loop. The framework automatically restarts a daemon if it exits unexpectedly due to an out-of-memory error or an unhandled exception, so you never need to wire up your own process supervisor for these use cases.
+
+Daemon threads require the Swoole PHP extension. Install it with `pecl install swoole` and add `extension=swoole.so` to your `php.ini` before using `#[DaemonThread]`.
+
+## The `#[DaemonThread]` Annotation
+
+Apply `#[DaemonThread]` to a class that extends `ServerWorkerProcess`. The annotation accepts two optional parameters:
+
+Parameter | Type | Default | Description
+---|---|---|---
+`name` | `string` | Class name | A human-readable label for the daemon process, used in logs and process tables.
+`coreSize` | `int` | `1` | Number of daemon process instances to start. Set to `0` (or any negative value) to disable the daemon entirely — useful for feature-flagging in different environments.
+
+```
+use dev\winterframework\stereotype\cli\DaemonThread;
+use dev\winterframework\io\process\ServerWorkerProcess;
+use dev\winterframework\io\process\ProcessType;
+
+#[DaemonThread(name: 'my-processor', coreSize: 2)]
+class SomeBackendProcessing extends ServerWorkerProcess
+{
+    // …
+}
+```
+
+## Implementing a Daemon Thread
+
+Every daemon class must extend `ServerWorkerProcess` and implement three members:
+
+Member | Visibility | Description
+---|---|---
+`getProcessType(): int` | `public abstract` | Returns a `ProcessType` constant identifying the process role.
+`getProcessId(): string` | `public abstract` | Returns a unique string identifier for this daemon instance (used by the supervisor).
+`run(): void` | `protected abstract` | Contains the daemon's main loop. Called once at startup; the process lives as long as this method runs.
+
+### ProcessType Constants
+
+`getProcessType()` should return one of the constants defined on the `ProcessType` interface:
+
+Constant | Value | Meaning
+---|---|---
+`ProcessType::OTHER` | `0` | General-purpose background process.
+`ProcessType::MASTER` | `1` | Framework master process.
+`ProcessType::MANAGER` | `2` | Framework manager process.
+`ProcessType::HTTP_WORKER` | `3` | HTTP request worker.
+`ProcessType::TASK_WORKER` | `4` | Generic task worker.
+`ProcessType::ASYNC_WORKER` | `5` | Async execution worker (see Async Tasks).
+`ProcessType::SCHED_WORKER` | `6` | Scheduling worker (see Scheduling).
+`ProcessType::KV_MONITOR` | `7` | Key-value store monitor.
+`ProcessType::QUEUE_MONITOR` | `8` | Queue monitor.
+`ProcessType::KV_SERVER` | `9` | Key-value server process.
+`ProcessType::QUEUE_SERVER` | `10` | Queue server process.
+
+For custom daemon threads use `ProcessType::OTHER` unless you are extending a built-in framework process type.
+
+## Complete Example
+
+```
+use dev\winterframework\stereotype\cli\DaemonThread;
+use dev\winterframework\io\process\ServerWorkerProcess;
+use dev\winterframework\io\process\ProcessType;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\pdbc\PdbcTemplate;
+
+#[DaemonThread]
+class SomeBackendProcessing extends ServerWorkerProcess
+{
+    #[Autowired]
+    protected PdbcTemplate $pdbc;
+
+    public function getProcessType(): int
+    {
+        return ProcessType::OTHER;
+    }
+
+    public function getProcessId(): string
+    {
+        return 'my-backend-processor';
+    }
+
+    protected function run(): void
+    {
+        while (1) {
+            $to_process = $this->pdbc->queryForList(
+                "SELECT * FROM SOME_TABLE WHERE STATUS = 'PENDING'"
+            );
+
+            foreach ($to_process as $row) {
+                // process each pending row …
+            }
+
+            // sleep for 5 seconds (Swoole coroutine-safe)
+            \Co::sleep(5);
+        }
+    }
+}
+```
+
+## Dependency Injection Inside Daemon Threads
+
+The `#[Autowired]` annotation works inside daemon thread classes just as it does in regular service beans. The framework performs property injection before calling `run()`, so any container-managed bean — database templates, configuration properties, other services — is available as soon as your loop starts.
+
+```
+use dev\winterframework\stereotype\cli\DaemonThread;
+use dev\winterframework\io\process\ServerWorkerProcess;
+use dev\winterframework\io\process\ProcessType;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\pdbc\PdbcTemplate;
+
+#[DaemonThread(name: 'order-processor', coreSize: 1)]
+class OrderProcessingDaemon extends ServerWorkerProcess
+{
+    #[Autowired]
+    private PdbcTemplate $pdbc;
+
+    #[Autowired]
+    private NotificationService $notifier;
+
+    public function getProcessType(): int
+    {
+        return ProcessType::OTHER;
+    }
+
+    public function getProcessId(): string
+    {
+        return 'order-processor';
+    }
+
+    protected function run(): void
+    {
+        while (1) {
+            $orders = $this->pdbc->queryForList(
+                "SELECT * FROM ORDERS WHERE STATUS = 'NEW' LIMIT 10"
+            );
+
+            foreach ($orders as $order) {
+                // Fulfil the order …
+                $this->notifier->sendConfirmation($order['customer_email'], $order['id']);
+            }
+
+            \Co::sleep(3);
+        }
+    }
+}
+```
+
+## Automatic Restart on Failure
+
+The Winter Boot framework monitors every registered daemon process. If a daemon exits — whether due to an uncaught exception, an out-of-memory error, or any other crash — the framework automatically restarts it. You do not need an external process manager (like Supervisor or systemd) to keep daemons alive.
+
+Daemon threads run for the **entire lifetime** of the application. They start when the application boots and are only stopped when the application itself shuts down. There is no mechanism to start or stop individual daemons dynamically at runtime.
+
+## Common Use Cases
+
+### Monitoring & Alerting
+
+Continuously poll metrics, health endpoints, or infrastructure telemetry. Fire alerts when thresholds are exceeded without adding latency to user-facing requests.
+
+### Stream Processing
+
+Consume messages from a queue, Kafka topic, or event stream in a tight loop. Process and acknowledge messages entirely outside the HTTP worker pool.
+
+### Background Jobs
+
+Pick up pending database rows, trigger batch reports, or run data-migration steps continuously in the background without blocking API responses.
+
+### Supervision & Coordination
+
+Act as a coordinator for other subsystems — reaping stale sessions, refreshing distributed caches, or enforcing rate limits across worker processes.

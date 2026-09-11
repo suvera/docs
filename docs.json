@@ -158,7 +158,8 @@
             "group": "Async & Concurrency",
             "pages": [
               "examples/daemon-app",
-              "examples/scheduler-app"
+              "examples/scheduler-app",
+              "examples/dtce-app"
             ]
           }
         ]

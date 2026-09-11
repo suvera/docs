@@ -1,0 +1,394 @@
+---
+title: "DTCE Sample Application"
+sidebarTitle: "DTCE tasks"
+description: "Build an end-to-end DTCE app with Winter Boot that prices order invoices in background workers, tested locally with a shared queue and disk store."
+---
+
+Build an invoice-pricing app that turns checkout carts into invoices in background workers. You use Winter Boot for the application runtime and the Winter DTCE module from Winter Modules for distributed task execution. You test the whole flow locally with the shared queue and disk store, so no Docker or external service is needed.
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `swoole` and `pcntl` extensions.
+
+```bash
+pecl install swoole
+```
+
+## Project structure
+
+The sample uses this layout:
+
+```
+dtce/
+├── bin/
+│   └── application.php          # Application entry point
+├── config/
+│   ├── application.yml          # Winter Boot application config
+│   └── dtce-config.yml          # DTCE task, worker, and queue config
+├── src/
+│   ├── DtceSampleApplication.php  # Main application class
+│   ├── controller/
+│   │   └── InvoiceDemoController.php  # REST endpoints that submit tasks and jobs
+│   └── task/
+│       └── InvoiceTotalWorker.php     # DTCE worker that prices one order
+└── composer.json                # Dependencies
+```
+
+## Install dependencies
+
+Require the framework and the modules package:
+
+```bash
+composer require suvera/winter-boot suvera/winter-modules
+```
+
+## Source files
+
+Switch between the five source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="DtceSampleApplication.php">
+    The single entry point. It points Winter Boot at the `config` directory and at the sample namespace.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\WinterBootApplication;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    class DtceSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="InvoiceTotalWorker.php">
+    The worker. It extends `AbstractTaskWorker`, computes subtotal, discount, tax, and total for one order, appends one line per order to a file, and returns the breakdown as an `ArrayOutput`.
+
+    ```php
+    <?php
+
+    namespace dev\example\task;
+
+    use dev\winterframework\dtce\task\worker\AbstractTaskWorker;
+    use dev\winterframework\dtce\task\worker\output\ArrayOutput;
+    use dev\winterframework\dtce\task\worker\TaskOutput;
+    use dev\winterframework\util\log\Wlf4p;
+
+    class InvoiceTotalWorker extends AbstractTaskWorker {
+        use Wlf4p;
+
+        private const OUTPUT_FILE = '/tmp/dtce-invoices.txt';
+
+        public function work(mixed $input): TaskOutput {
+            $output = new ArrayOutput();
+
+            if (!is_array($input) || empty($input['items'])) {
+                $output->set(['error' => 'Invalid order: missing items']);
+                return $output;
+            }
+
+            $subtotal = 0.0;
+            foreach ($input['items'] as $item) {
+                $subtotal += (float)$item['price'] * (int)$item['qty'];
+            }
+
+            $discount = $subtotal * ((float)($input['discountPct'] ?? 0) / 100);
+            $taxable = $subtotal - $discount;
+            $tax = $taxable * ((float)($input['taxPct'] ?? 0) / 100);
+            $total = round($taxable + $tax, 2);
+
+            $output->set([
+                'subtotal' => round($subtotal, 2),
+                'discount' => round($discount, 2),
+                'tax' => round($tax, 2),
+                'total' => $total,
+            ]);
+
+            $line = sprintf(
+                "[%s] Items: %d | Subtotal: %.2f | Discount: %.2f | Tax: %.2f | Total: %.2f",
+                date('Y-m-d H:i:s'),
+                count($input['items']),
+                $subtotal,
+                $discount,
+                $tax,
+                $total
+            ) . PHP_EOL;
+
+            file_put_contents(
+                self::OUTPUT_FILE,
+                $line,
+                FILE_APPEND | LOCK_EX
+            );
+
+            self::logInfo('Priced order: ' . trim($line));
+
+            return $output;
+        }
+    }
+    ```
+
+    The `Wlf4p` trait gives you the `logInfo()` helper used on the last lines. DTCE calls `work()` with the task input and stores the returned `TaskOutput` for the caller to read back.
+  </Tab>
+
+  <Tab title="InvoiceDemoController.php">
+    The controller. It autowires `TaskExecutionServiceFactory` and exposes two endpoints: one that prices a single order with `executeTask()`, and one that settles a batch of sample orders as a single job with `executeJob()`.
+
+    ```php
+    <?php
+
+    namespace dev\example\controller;
+
+    use dev\winterframework\dtce\task\service\TaskExecutionServiceFactory;
+    use dev\winterframework\stereotype\Autowired;
+    use dev\winterframework\stereotype\RestController;
+    use dev\winterframework\stereotype\web\GetMapping;
+    use dev\winterframework\stereotype\web\PostMapping;
+    use dev\winterframework\stereotype\web\RequestParam;
+    use Exception;
+
+    #[RestController]
+    class InvoiceDemoController {
+
+        #[Autowired]
+        private TaskExecutionServiceFactory $factory;
+
+        /**
+         * Price a single order synchronously through DTCE.
+         * items is a JSON array like [{"price":999,"qty":1}]
+         */
+        #[PostMapping(path: "/invoicedemo/price")]
+        public function priceOrder(
+            #[RequestParam] string $items,
+            #[RequestParam(required: false, defaultValue: '0')] float $discountPct = 0,
+            #[RequestParam(required: false, defaultValue: '0')] float $taxPct = 0
+        ): array {
+            try {
+                $decoded = json_decode($items, true);
+                if (!is_array($decoded) || empty($decoded)) {
+                    return [
+                        'success' => false,
+                        'error' => 'items must be a non-empty JSON array'
+                    ];
+                }
+
+                $executor = $this->factory->executionService("invoiceTotal");
+                $result = $executor->executeTask([
+                    'items' => $decoded,
+                    'discountPct' => $discountPct,
+                    'taxPct' => $taxPct,
+                ]);
+
+                if (!$result->isSuccess()) {
+                    return [
+                        'success' => false,
+                        'error' => 'Invoice task failed'
+                    ];
+                }
+
+                return [
+                    'success' => true,
+                    'invoice' => $result->getResult()->get()
+                ];
+            } catch (Exception $e) {
+                return [
+                    'success' => false,
+                    'error' => $e->getMessage()
+                ];
+            }
+        }
+
+        /**
+         * Settle a batch of sample orders as one DTCE job
+         */
+        #[GetMapping(path: "/invoicedemo/settle")]
+        public function settleBatch(): array {
+            try {
+                $orders = [
+                    ['items' => [['price' => 999.00, 'qty' => 1]], 'discountPct' => 0, 'taxPct' => 18],
+                    ['items' => [['price' => 49.50, 'qty' => 2]], 'discountPct' => 10, 'taxPct' => 18],
+                    ['items' => [['price' => 19.99, 'qty' => 5], ['price' => 5.00, 'qty' => 2]], 'discountPct' => 5, 'taxPct' => 0],
+                ];
+
+                $executor = $this->factory->executionService("invoiceTotal");
+                $job = $executor->newJob();
+                $job->addTasks(...$orders);
+                $jobResult = $executor->executeJob($job);
+
+                $invoices = [];
+                foreach ($jobResult->getResults() as $index => $taskResult) {
+                    $invoices[$index] = $taskResult->isSuccess()
+                        ? $taskResult->getResult()->get()
+                        : ['error' => 'task failed'];
+                }
+
+                return [
+                    'success' => true,
+                    'invoices' => $invoices
+                ];
+            } catch (Exception $e) {
+                return [
+                    'success' => false,
+                    'error' => $e->getMessage()
+                ];
+            }
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\DtceSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    DtceSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares framework dependencies with PSR-4 autoloading for its own namespace.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-dtce-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "suvera/winter-boot": "@dev",
+            "suvera/winter-modules": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds local `path` repositories for `winter-boot` and `winter-modules` so it resolves them from a sibling checkout. You do not need those entries when you install released packages from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+Switch between the two config files. `application.yml` enables the module and sets the shared-queue port, and `dtce-config.yml` defines the `invoiceTotal` task with its worker, disk store, and shared queue.
+
+<Tabs>
+  <Tab title="application.yml">
+    The full sample file registers `DtceModule` and sets the server and app identity. `winter.queue.port` is required by the shared queue used below:
+
+    ```yaml
+    server:
+        port: 8080
+        address: 0.0.0.0
+        context-path: /
+    winter:
+        application:
+            name: DTCE Sample Application
+            id: dtce-sample-app
+            version: 1.0.0
+        queue:
+            port: 7881
+    modules:
+        -   module: dev\winterframework\dtce\DtceModule
+            enabled: true
+            configFile: dtce-config.yml
+    ```
+
+    See [Configuration](/configuration) for every `application.yml` key.
+  </Tab>
+
+  <Tab title="dtce-config.yml">
+    Defines the `invoiceTotal` task: task input and output live on local disk, two `InvoiceTotalWorker` workers drain a process-shared queue:
+
+    ```yaml
+    tasks:
+        -   name: invoiceTotal
+            storage:
+                handler: dev\winterframework\dtce\task\storage\TaskIOStorageDisk
+                path: /tmp
+            worker:
+                total: 2
+                class: dev\example\task\InvoiceTotalWorker
+            queue:
+                handler: dev\winterframework\dtce\task\storage\TaskQueueShared
+    ```
+
+    The disk store and shared queue are local to one machine. For multi-node setups use the Redis, Kafka, or Pdbc handlers instead. See the [DTCE module](/modules/dtce) for every backend and tuning option.
+  </Tab>
+</Tabs>
+
+## Run the app
+
+Start the app, price one order, settle a batch, then check the output file.
+
+**1. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+The DTCE workers start processing the `invoiceTotal` queue as soon as the app boots.
+
+**2. Price a single order:**
+
+```bash
+curl -X POST http://localhost:8080/invoicedemo/price \
+  --data-urlencode 'items=[{"price":999,"qty":1},{"price":49.5,"qty":2}]' \
+  --data-urlencode 'discountPct=10' \
+  --data-urlencode 'taxPct=18'
+```
+
+You get the invoice breakdown back, for example:
+
+```json
+{"success":true,"invoice":{"subtotal":1098,"discount":109.8,"tax":177.88,"total":1166.08}}
+```
+
+**3. Settle a batch of orders as one job:**
+
+```bash
+curl "http://localhost:8080/invoicedemo/settle"
+```
+
+You get one invoice per order in the job, for example:
+
+```json
+{"success":true,"invoices":[{"subtotal":999,"discount":0,"tax":179.82,"total":1178.82},{"subtotal":99,"discount":9.9,"tax":16.04,"total":105.14},{"subtotal":109.95,"discount":5.5,"tax":0,"total":104.45}]}
+```
+
+**4. Verify the worker output:**
+
+```bash
+cat /tmp/dtce-invoices.txt
+```
+
+You see one line per priced order, for example:
+
+```text
+[2026-09-10 12:00:01] Items: 2 | Subtotal: 1098.00 | Discount: 109.80 | Tax: 177.88 | Total: 1166.08
+[2026-09-10 12:00:02] Items: 1 | Subtotal: 999.00 | Discount: 0.00 | Tax: 179.82 | Total: 1178.82
+```
+
+## Next steps
+
+- Read the [DTCE module](/modules/dtce) for the async APIs (`addTask`, `addJob`, `taskStatus`, `stopTask`), persistent backends, and full configuration.
+- Browse all [Libraries](/modules/overview) when you need Kafka, SQS, Redis, or Doctrine in the same app.

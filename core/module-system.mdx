@@ -148,7 +148,7 @@ See the [Modules overview](/modules/overview) for a full catalog with guidance o
 Package any infrastructure concern — a third-party SDK, a custom cache layer, an internal service client — as a reusable, injectable module by following these steps.
 
 <Steps>
-  ### Create the module class
+  <Step title="Create the module class">
 
   ```php src/Module/AcmeMyModule.php
   <?php
@@ -174,7 +174,8 @@ Package any infrastructure concern — a third-party SDK, a custom cache layer, 
   }
   ```
 
-  ### Register beans inside `init()`
+  </Step>
+  <Step title="Register beans inside init()">
 
   Use `ApplicationContextData::getBeanProvider()` to register beans that consumers can inject with `#[Autowired]`:
 
@@ -190,7 +191,8 @@ Package any infrastructure concern — a third-party SDK, a custom cache layer, 
   }
   ```
 
-  ### Read module configuration
+  </Step>
+  <Step title="Read module configuration">
 
   The framework passes the raw `moduleDef` YAML entry to your `#[Module]` attribute. Use the `ModuleTrait` helper to retrieve it:
 
@@ -210,7 +212,8 @@ Package any infrastructure concern — a third-party SDK, a custom cache layer, 
   }
   ```
 
-  ### Enable the module in `application.yml`
+  </Step>
+  <Step title="Enable the module in application.yml">
 
   ```yaml application.yml
   modules:
@@ -219,11 +222,14 @@ Package any infrastructure concern — a third-party SDK, a custom cache layer, 
       configFile: 'config/acme.yml'
   ```
 
-  ### Install via Composer
+  </Step>
+  <Step title="Install via Composer">
 
   ```bash
   composer require acme/my-winter-module
   ```
+
+  </Step>
 </Steps>
 
 <Tip>

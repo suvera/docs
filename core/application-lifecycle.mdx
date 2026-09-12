@@ -11,43 +11,51 @@ Every Winter Boot application begins with a single annotated class and a call to
 The container follows a fixed, deterministic sequence every time your application boots.
 
 <Steps>
-
-### Bootstrap the runner
+  <Step title="Bootstrap the runner">
 
 Instantiate a runner class (e.g. `WinterWebSwooleApplication`) and call `run(MyApplication::class)`. The runner reads the `#[WinterBootApplication]` attribute to learn which config directories and namespaces to use.
 
-### Load configuration
+  </Step>
+  <Step title="Load configuration">
 
 The runner locates and parses every `application.yml` (and profile-specific variants) in the configured `configDirectory` paths. The merged result is available through `ApplicationContext::getProperty*()` before any bean is created.
 
-### Scan namespaces
+  </Step>
+  <Step title="Scan namespaces">
 
 The runner walks the PSR-4 namespaces listed in `scanNamespaces`, skipping any prefixes in `scanExcludeNamespaces`. Every class carrying a known stereotype attribute is recorded as a `ClassResource` in the registry. If `autoload` is `true`, classes that have not been loaded by Composer yet are loaded on demand during this scan.
 
-### Build the application context
+  </Step>
+  <Step title="Build the application context">
 
 The `WinterApplicationContext` is constructed from the scanned resources. If `eager` is `true`, every bean is instantiated immediately; otherwise beans are instantiated lazily on first access.
 
-### Wire dependencies
+  </Step>
+  <Step title="Wire dependencies">
 
 For each instantiated bean the container resolves all `#[Autowired]` properties and `#[Value]` properties, injecting the correct objects and scalar values.
 
-### Call `#[PostConstruct]` methods
+  </Step>
+  <Step title="Call #[PostConstruct] methods">
 
 After a bean is fully constructed and its dependencies are injected, any public non-abstract method annotated with `#[PostConstruct]` is called. Use this hook for validation, connection setup, or derived-field initialisation that depends on injected values.
 
-### Load modules
+  </Step>
+  <Step title="Load modules">
 
 Modules listed in `application.yml` under the `modules` key are initialised. Each module can contribute its own beans and namespaces to the context.
 
-### Fire `#[OnApplicationReady]`
+  </Step>
+  <Step title="Fire #[OnApplicationReady]">
 
 Every bean whose class is annotated with `#[OnApplicationReady]` has its `onApplicationReady()` method called. This is the correct place for work that must happen after the entire context is ready — seeding data, starting background threads, registering routes, or opening connections.
 
-### Start serving
+  </Step>
+  <Step title="Start serving">
 
 The runner hands off to the underlying runtime — starting the Swoole HTTP server, dispatching a single PHP-FPM request, executing CLI logic, or running migrations.
 
+  </Step>
 </Steps>
 
 ---

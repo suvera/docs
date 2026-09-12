@@ -13,7 +13,7 @@ Winter Boot's OpenSearch migration runner applies JSON-based index templates, IS
 ## Quick start
 
 <Steps>
-  ### Enable migrations on the connection
+  <Step title="Enable migrations on the connection">
 
   Add `migrations.enabled: true` to your OpenSearch connection. This works both for connections declared directly in `application.yml` and for connections defined in a module config file such as `opensearch-config.yml`.
 
@@ -29,7 +29,8 @@ Winter Boot's OpenSearch migration runner applies JSON-based index templates, IS
               enabled: true
   ```
 
-  ### Create the migration directory
+  </Step>
+  <Step title="Create the migration directory">
 
   ```bash
   mkdir -p /migrations/opensearch
@@ -37,7 +38,8 @@ Winter Boot's OpenSearch migration runner applies JSON-based index templates, IS
 
   Migrations live in one folder per connection name, so a connection named `opensearch` reads files from `/migrations/opensearch/`.
 
-  ### Add JSON files
+  </Step>
+  <Step title="Add JSON files">
 
   Create `/migrations/opensearch/sf-entities-template.json`:
 
@@ -57,7 +59,8 @@ Winter Boot's OpenSearch migration runner applies JSON-based index templates, IS
   }
   ```
 
-  ### Run migrations
+  </Step>
+  <Step title="Run migrations">
 
   ```bash
   # Using the PHAR built with build/sqlmigrator/build.sh
@@ -68,6 +71,8 @@ Winter Boot's OpenSearch migration runner applies JSON-based index templates, IS
   ```
 
   Omit `-m` (or pass `-m sql`) to run SQL migrations instead. The `--sqlPath` argument is the shared migrations root for both types.
+
+  </Step>
 </Steps>
 
 ## Migration file types

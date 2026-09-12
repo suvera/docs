@@ -161,15 +161,14 @@ class CheckoutService {
 You can create your own AOP attributes using two components: an **attribute class** that implements `AopStereoType`, and an **interceptor class** that implements `WinterAspect`. Once both classes live in a scanned namespace, apply the attribute to any managed bean method.
 
 <Steps>
-
-### Create the attribute class
+  <Step title="Create the attribute class">
 
 Declare a PHP attribute class, annotate it with `#[StereoTyped]`, and implement the `AopStereoType` interface. The attribute class must implement two methods:
 
 - `isPerInstance(): bool` — return `true` if a new interceptor instance should be created per bean instance, or `false` for a shared stateless interceptor.
 - `getAspect(): WinterAspect` — return the interceptor object (lazily constructed).
 
-```php MustBeAdmin.php
+```php TimedLog.php
 use Attribute;
 use dev\winterframework\stereotype\StereoTyped;
 use dev\winterframework\stereotype\aop\AopStereoType;
@@ -180,10 +179,15 @@ use dev\winterframework\type\TypeAssert;
 
 #[Attribute(Attribute::TARGET_METHOD)]
 #[StereoTyped]
-class MustBeAdmin implements AopStereoType {
+class TimedLog implements AopStereoType {
     use StereoTypeValidations;
 
-    private MustBeAdminInterceptor $interceptor;
+    private ?TimedLogInterceptor $interceptor = null;
+
+    public function __construct(
+        public int $thresholdMs = 500
+    ) {
+    }
 
     public function isPerInstance(): bool {
         return false; // shared stateless interceptor
@@ -191,7 +195,7 @@ class MustBeAdmin implements AopStereoType {
 
     public function getAspect(): WinterAspect {
         if (!isset($this->interceptor)) {
-            $this->interceptor = new MustBeAdminInterceptor();
+            $this->interceptor = new TimedLogInterceptor();
         }
         return $this->interceptor;
     }
@@ -199,7 +203,7 @@ class MustBeAdmin implements AopStereoType {
     public function init(object $ref): void {
         /** @var RefMethod $ref */
         TypeAssert::typeOf($ref, RefMethod::class);
-        $this->validateAopMethod($ref, 'MustBeAdmin');
+        $this->validateAopMethod($ref, 'TimedLog');
     }
 }
 ```
@@ -210,29 +214,26 @@ class MustBeAdmin implements AopStereoType {
   interceptor needs to hold per-bean state.
 </Tip>
 
-### Create the interceptor class
+  </Step>
+  <Step title="Create the interceptor class">
 
 Implement `WinterAspect` with all five lifecycle methods. `AopContext` carries method reflection and the application context. `AopExecutionContext` carries the target object, arguments, and execution control handles.
 
-```php MustBeAdminInterceptor.php
+```php TimedLogInterceptor.php
 use dev\winterframework\stereotype\aop\WinterAspect;
 use dev\winterframework\stereotype\aop\AopContext;
 use dev\winterframework\core\aop\AopExecutionContext;
 use dev\winterframework\util\log\Wlf4p;
 use Throwable;
 
-class MustBeAdminInterceptor implements WinterAspect {
+class TimedLogInterceptor implements WinterAspect {
     use Wlf4p;
 
-    public function begin(AopContext $ctx, AopExecutionContext $exCtx): void {
-        // Runs BEFORE the method body
-        $user = UserAuthenticationContext::currentLoggedInUser();
+    const START_TIME = 'TimedLog_start';
 
-        if (is_null($user) || !$user->isAdmin()) {
-            // Stop the method from executing and set the return value
-            $exCtx->stopExecution(null);
-            throw new AccessDeniedException('User is not an Admin');
-        }
+    public function begin(AopContext $ctx, AopExecutionContext $exCtx): void {
+        // Runs BEFORE the method body — stash the start time
+        $exCtx->setVariable(self::START_TIME, microtime(true));
     }
 
     public function beginFailed(
@@ -241,7 +242,7 @@ class MustBeAdminInterceptor implements WinterAspect {
         Throwable $ex
     ): void {
         // Runs if begin() threw an exception
-        self::logError('MustBeAdmin begin failed for ' . $ctx->getMethod()->getName());
+        self::logError('TimedLog begin failed for ' . $ctx->getMethod()->getName());
     }
 
     public function commit(
@@ -250,6 +251,17 @@ class MustBeAdminInterceptor implements WinterAspect {
         mixed $result
     ): void {
         // Runs AFTER the method body succeeds — $result is the return value
+        $durationMs = $this->durationMs($exCtx);
+        $method = $ctx->getMethod()->getName();
+
+        /** @var TimedLog $attr */
+        $attr = $ctx->getStereoType();
+
+        if ($durationMs >= $attr->thresholdMs) {
+            self::logWarning($method . ' took ' . round($durationMs, 2) . 'ms');
+        } else {
+            self::logInfo($method . ' took ' . round($durationMs, 2) . 'ms');
+        }
     }
 
     public function commitFailed(
@@ -259,6 +271,7 @@ class MustBeAdminInterceptor implements WinterAspect {
         Throwable $ex
     ): void {
         // Runs if commit() threw an exception
+        self::logError('TimedLog commit failed for ' . $ctx->getMethod()->getName());
     }
 
     public function failed(
@@ -267,35 +280,54 @@ class MustBeAdminInterceptor implements WinterAspect {
         Throwable $ex
     ): void {
         // Runs if the method body threw an exception
-        self::logError('MustBeAdmin check failed: ' . $ex->getMessage());
+        $durationMs = $this->durationMs($exCtx);
+        self::logError(
+            $ctx->getMethod()->getName() . ' failed after '
+            . round($durationMs, 2) . 'ms: ' . $ex->getMessage()
+        );
+    }
+
+    private function durationMs(AopExecutionContext $exCtx): float {
+        $start = $exCtx->getVariable(self::START_TIME);
+        if (!is_float($start)) {
+            return 0.0;
+        }
+        return (microtime(true) - $start) * 1000;
     }
 }
 ```
 
-### Apply your custom attribute
+  </Step>
+  <Step title="Apply your custom attribute">
 
 Once both classes are in a scanned namespace, apply the attribute to any managed bean method:
 
-```php AdminDashboard.php
+```php OrderService.php
 use dev\winterframework\stereotype\Service;
 
 #[Service]
-class AdminDashboard {
+class OrderService {
 
-    #[MustBeAdmin]
-    public function exportAllUsers(): array {
-        // This body only runs when the logged-in user is an Admin
-        return $this->userRepository->findAll();
+    #[TimedLog]
+    public function createOrder(array $items): Order {
+        // Duration is logged on every call; warns when it exceeds 500ms
+        return $this->orderRepository->save($items);
     }
 
-    #[MustBeAdmin]
-    public function deleteAccount(int $userId): void {
-        $this->userRepository->delete($userId);
+    #[TimedLog(thresholdMs: 200)]
+    public function exportAllOrders(): array {
+        // Warns when the export takes 200ms or longer
+        return $this->orderRepository->findAll();
     }
 }
 ```
 
+  </Step>
 </Steps>
+
+<Note>
+  AOP attributes are validated at startup: they are not allowed on constructors, destructors, abstract, private, static, or final methods — a `TypeError` is raised otherwise.
+</Note>
 
 ---
 
@@ -347,7 +379,7 @@ $txId = $exCtx->getVariable('txId');
 ```php AopContext usage
 // Full reflection object for the intercepted method
 $method = $ctx->getMethod();             // RefMethod
-$name   = $ctx->getMethod()->getName();  // e.g. "exportAllUsers"
+$name   = $ctx->getMethod()->getName();  // e.g. "exportAllOrders"
 
 // The AOP attribute instance (your custom attribute class)
 $attr = $ctx->getStereoType();

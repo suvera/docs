@@ -202,7 +202,7 @@ public function getUser(#[PathVariable] int $id): array
 
 ## `#[RequestBody]`
 
-`#[RequestBody]` (namespace `dev\winterframework\stereotype\web\RequestBody`) binds the entire HTTP request body to a method parameter. Winter Boot deserialises JSON payloads **and** URL-encoded form bodies into the target class automatically. The parameter must be type-hinted with a concrete class, or `string` to receive the raw body. Union types are not supported.
+`#[RequestBody]` (namespace `dev\winterframework\stereotype\web\RequestBody`) binds the entire HTTP request body to a method parameter. Winter Boot deserialises JSON, XML, URL-encoded form bodies, **and** multipart forms into the target class automatically. The parameter must be type-hinted with a concrete class, or `string` to receive the raw body. Union types are not supported.
 
 <Tabs>
   <Tab title="Deserialised Object">
@@ -246,3 +246,80 @@ public function getUser(#[PathVariable] int $id): array
 <Note>
   Only one `#[RequestBody]` parameter is allowed per handler method. You can freely combine it with `#[PathVariable]` and `#[RequestParam]` parameters in the same method signature.
 </Note>
+
+### Single-string-arg constructor fallback
+
+When the request `Content-Type` is none of form, multipart, JSON, or XML — or when parsing is disabled (see `disableParsing` below) — the raw body string is passed straight to your class constructor. The class must therefore declare a constructor taking a single string argument:
+
+```php
+class CsvPayload
+{
+    public array $rows;
+
+    public function __construct(string $raw)
+    {
+        $this->rows = explode("\n", trim($raw));
+    }
+}
+```
+
+Any other constructor shape fails here and the request is rejected with `400 Bad Request`.
+
+<ParamField body="disableParsing" type="bool">
+  Skips JSON/XML deserialisation. Defaults to `false`. When `true`, the raw body is handed to the single-string-arg constructor instead — useful for hand-rolled formats.
+</ParamField>
+
+```php
+use dev\winterframework\stereotype\web\PostMapping;
+use dev\winterframework\stereotype\web\RequestBody;
+
+#[PostMapping(path: '/import')]
+public function import(#[RequestBody(disableParsing: true)] CsvPayload $payload): array
+{
+    return $this->importService->handle($payload->rows);
+}
+```
+
+### File uploads (`multipart/form-data`)
+
+For `multipart/form-data` requests, text fields and uploaded files are merged into a single map keyed by field name, then bound to your DTO by property name:
+
+* Declare text fields as scalars (`string`, `int`, `float`, `bool`) — values are type-cast.
+* Declare a file field as `HttpUploadedFile` (namespace `dev\winterframework\web\http\HttpUploadedFile`) to get a typed object — `getFilePath()` for the temp path, plus `getName()`, `getSize()`, `getError()` / `getErrorText()`. Declare it as `array` instead to receive the raw `$_FILES` entry (`name`, `type`, `tmp_name`, `error`, `size`).
+* A multi-file field (`<input type="file" name="photos" multiple>`) keeps PHP's parallel-array `$_FILES` shape — normalise it yourself, or inject `HttpRequest` and use `getFiles()` / `getFile($name)` instead.
+
+```php
+use dev\winterframework\stereotype\web\PostMapping;
+use dev\winterframework\stereotype\web\RequestBody;
+use dev\winterframework\web\http\HttpUploadedFile;
+
+class AvatarUpload
+{
+    public string $username;
+    public HttpUploadedFile $avatar;  // matches <input name="avatar" type="file">
+    // public array $avatar;          // alternative: raw $_FILES entry
+}
+
+#[PostMapping(path: '/avatar')]
+public function upload(#[RequestBody] AvatarUpload $req): array
+{
+    return ['tmp' => $req->avatar->getFilePath(), 'size' => $req->avatar->getSize()];
+}
+```
+
+### Typed list properties
+
+DTO properties may be typed as `StringList`, `IntegerList`, or `FloatList` (namespace `dev\winterframework\type`) to receive JSON arrays (or repeated `field[]` form params) as typed collections. Numbers are coerced to strings for `StringList`; whole-number strings are coerced to integers for `IntegerList` (floats such as `1.5`, `2.0`, or `"2.0"` are rejected); integers and numeric strings are coerced to floats for `FloatList`. Anything else is rejected with `400 Bad Request`.
+
+```php
+use dev\winterframework\type\FloatList;
+use dev\winterframework\type\IntegerList;
+use dev\winterframework\type\StringList;
+
+class BulkRequest
+{
+    public StringList $csvRow;   // ["a", "b"]  — or ["a", 1] → ["a", "1"]
+    public IntegerList $ids;     // [1, "2"] → [1, 2]
+    public FloatList $scores;    // [1.5, 2, "3.25"] → [1.5, 2.0, 3.25]
+}
+```

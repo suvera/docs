@@ -329,6 +329,12 @@ class OrderService {
   AOP attributes are validated at startup: they are not allowed on constructors, destructors, abstract, private, static, or final methods — a `TypeError` is raised otherwise.
 </Note>
 
+## AOP on controllers
+
+In a `#[RestController]`, put AOP attributes only on endpoint methods — the methods marked with `#[GetMapping]`, `#[PostMapping]`, or the other mapping attributes. Those methods run when someone calls their URL, and your advice runs along with them.
+
+Do not put AOP attributes on plain helper methods inside a controller. Helpers run as ordinary method calls, so your advice will simply never run for them — the attribute sits there doing nothing, with no error to tell you. If a helper needs guarding, move that logic into a `#[Service]` bean instead, where AOP works on every public method.
+
 ---
 
 ## WinterAspect lifecycle reference
@@ -388,3 +394,9 @@ $attr = $ctx->getStereoType();
 $appCtx = $ctx->getApplicationContext();
 $repo   = $appCtx->beanByClass(UserRepository::class);
 ```
+
+---
+
+## Next steps
+
+See the [AOP guard example](/examples/aop-app) for a complete runnable app: a custom `#[RequireCustomHeader]` attribute protecting a REST endpoint with a `403` deny path.

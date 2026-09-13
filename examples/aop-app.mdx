@@ -1,0 +1,335 @@
+---
+title: "AOP Guard Sample Application"
+sidebarTitle: "AOP guard"
+description: "Protect a REST endpoint with a custom AOP attribute that checks a request header and denies with 403."
+---
+
+Build an app that guards a REST endpoint with a custom AOP attribute. You annotate the endpoint method with `#[RequireCustomHeader]` and the framework runs your interceptor before the method body: requests carrying `X-Custom-Foo-Bar: foo-bar` go through, everything else is denied with `403` without the method executing. This example applies the concepts from the main [AOP documentation](/core/aop) — attributes, interceptors, and the advice lifecycle — to a complete runnable app.
+
+<Warning>
+  Your attribute class must carry `#[StereoTyped]` (next to `#[Attribute]`). Without it the scanner never registers the attribute and your advice is silently ignored — the endpoint just runs unguarded.
+</Warning>
+
+<Note>
+  In a controller, put AOP attributes only on endpoint methods — the methods marked with `#[GetMapping]`, `#[PostMapping]`, or the other mapping attributes. Plain helper methods inside a controller never trigger advice, even when annotated, so keep them free of AOP attributes. The same attribute works on every public method of a `#[Service]` bean.
+</Note>
+
+## Prerequisites
+
+You need PHP 8.5 or later with the `swoole` and `pcntl` extensions. No external services are needed.
+
+## Project structure
+
+The sample uses this layout:
+
+```
+aop-guard/
+├── bin/
+│   └── application.php              # Application entry point
+├── config/
+│   └── application.yml              # Server and app identity
+├── src/
+│   ├── AopSampleApplication.php     # Main application class
+│   ├── aop/
+│   │   ├── RequireCustomHeader.php            # The AOP attribute
+│   │   └── RequireCustomHeaderInterceptor.php # The advice
+│   └── rest/
+│       └── AopDemoController.php    # Guarded endpoint
+└── composer.json                    # Dependencies
+```
+
+## Install dependencies
+
+Require the framework package:
+
+```bash
+composer require suvera/winter-boot
+```
+
+## Source files
+
+Switch between the source files. Each tab shows the exact file from the sample.
+
+<Tabs>
+  <Tab title="AopSampleApplication.php">
+    The single entry point. No extra `#[Enable*]` attribute is needed — AOP support is always on.
+
+    ```php
+    <?php
+
+    namespace dev\example;
+
+    use dev\winterframework\stereotype\WinterBootApplication;
+
+    #[WinterBootApplication(
+        configDirectory: [__DIR__ . "/../config"],
+        scanNamespaces: [
+            ['dev\\example', __DIR__ . '']
+        ]
+    )]
+    class AopSampleApplication {
+
+        public static function main(): void {
+            $winterApp = new \dev\winterframework\core\app\WinterWebSwooleApplication();
+            $winterApp->run(self::class);
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="aop/RequireCustomHeader.php">
+    The attribute. It declares which header and value to require (with defaults), hands out one shared interceptor instance, and validates at boot that it sits on a suitable public method.
+
+    ```php
+    <?php
+    declare(strict_types=1);
+
+    namespace dev\example\aop;
+
+    use Attribute;
+    use dev\winterframework\reflection\ref\RefMethod;
+    use dev\winterframework\reflection\support\StereoTypeValidations;
+    use dev\winterframework\stereotype\StereoTyped;
+    use dev\winterframework\stereotype\aop\AopStereoType;
+    use dev\winterframework\stereotype\aop\WinterAspect;
+    use dev\winterframework\type\TypeAssert;
+
+    #[Attribute(Attribute::TARGET_METHOD)]
+    #[StereoTyped]
+    class RequireCustomHeader implements AopStereoType {
+        use StereoTypeValidations;
+
+        private ?RequireCustomHeaderInterceptor $interceptor = null;
+
+        public function __construct(
+            public string $headerName = 'X-Custom-Foo-Bar',
+            public string $expectedValue = 'foo-bar'
+        ) {
+        }
+
+        public function isPerInstance(): bool {
+            return false; // shared stateless interceptor
+        }
+
+        public function getAspect(): WinterAspect {
+            if (!isset($this->interceptor)) {
+                $this->interceptor = new RequireCustomHeaderInterceptor();
+            }
+            return $this->interceptor;
+        }
+
+        public function init(object $ref): void {
+            /** @var RefMethod $ref */
+            TypeAssert::typeOf($ref, RefMethod::class);
+            $this->validateAopMethod($ref, 'RequireCustomHeader');
+        }
+    }
+    ```
+
+    `#[StereoTyped]` is what makes the scanner discover your attribute class. `isPerInstance() => false` shares one interceptor across all guarded methods.
+  </Tab>
+
+  <Tab title="aop/RequireCustomHeaderInterceptor.php">
+    The advice. `begin()` runs before the endpoint body: it reads the header from the request and calls `stopExecution()` with a `403` response on mismatch, so the body never runs. Throwing from `begin()` would surface as a `500` — denying via `stopExecution()` is what produces the `403`.
+
+    ```php
+    <?php
+    declare(strict_types=1);
+
+    namespace dev\example\aop;
+
+    use dev\winterframework\core\aop\AopExecutionContext;
+    use dev\winterframework\exception\WinterException;
+    use dev\winterframework\stereotype\aop\AopContext;
+    use dev\winterframework\stereotype\aop\WinterAspect;
+    use dev\winterframework\util\log\Wlf4p;
+    use dev\winterframework\web\http\HttpRequest;
+    use dev\winterframework\web\http\HttpStatus;
+    use dev\winterframework\web\http\ResponseEntity;
+    use Throwable;
+
+    class RequireCustomHeaderInterceptor implements WinterAspect {
+        use Wlf4p;
+
+        public function begin(AopContext $ctx, AopExecutionContext $exCtx): void {
+            /** @var RequireCustomHeader $stereo */
+            $stereo = $ctx->getStereoType();
+
+            $request = null;
+            foreach ($exCtx->getArguments() as $arg) {
+                if ($arg instanceof HttpRequest) {
+                    $request = $arg;
+                    break;
+                }
+            }
+            if (!isset($request)) {
+                throw new WinterException(
+                    '#[RequireCustomHeader] needs an HttpRequest argument on method '
+                    . $ctx->getMethod()->getName()
+                );
+            }
+
+            if ($request->getFirstHeader($stereo->headerName) !== $stereo->expectedValue) {
+                self::logWarning('Forbidden call to ' . $ctx->getMethod()->getName());
+                $exCtx->stopExecution(
+                    ResponseEntity::status(HttpStatus::$FORBIDDEN)->withJson([
+                        'success' => false,
+                        'data' => null,
+                        'error' => 'Forbidden'
+                    ])
+                );
+            }
+        }
+
+        public function beginFailed(AopContext $ctx, AopExecutionContext $exCtx, Throwable $ex): void {
+            self::logError('RequireCustomHeader begin failed: ' . $ex->getMessage());
+        }
+
+        public function commit(AopContext $ctx, AopExecutionContext $exCtx, mixed $result): void {
+            self::logInfo('RequireCustomHeader check passed for ' . $ctx->getMethod()->getName());
+        }
+
+        public function commitFailed(AopContext $ctx, AopExecutionContext $exCtx, mixed $result, Throwable $ex): void {
+            self::logError('RequireCustomHeader commit failed: ' . $ex->getMessage());
+        }
+
+        public function failed(AopContext $ctx, AopExecutionContext $exCtx, Throwable $ex): void {
+            self::logError($ctx->getMethod()->getName() . ' failed: ' . $ex->getMessage());
+        }
+    }
+    ```
+  </Tab>
+
+  <Tab title="rest/AopDemoController.php">
+    The guarded endpoint. It declares an `HttpRequest` argument so the interceptor can read the incoming headers.
+
+    ```php
+    <?php
+    declare(strict_types=1);
+
+    namespace dev\example\rest;
+
+    use dev\example\aop\RequireCustomHeader;
+    use dev\winterframework\stereotype\RestController;
+    use dev\winterframework\stereotype\web\GetMapping;
+    use dev\winterframework\stereotype\web\RequestMapping;
+    use dev\winterframework\web\http\HttpRequest;
+
+    #[RestController]
+    #[RequestMapping(path: "aop-demo")]
+    class AopDemoController {
+
+        #[GetMapping(path: "secure-greeting")]
+        #[RequireCustomHeader]
+        public function secureGreeting(HttpRequest $request): array {
+            return [
+                'success' => true,
+                'data' => 'Hello from the AOP-guarded endpoint!'
+            ];
+        }
+    }
+    ```
+
+    To guard another endpoint, add an `HttpRequest` argument and annotate it — custom header name and value are optional parameters: `#[RequireCustomHeader(headerName: "X-Api-Key", expectedValue: "secret")]`.
+  </Tab>
+
+  <Tab title="bin/application.php">
+    The launch script. It loads the Composer autoloader and starts the application.
+
+    ```php
+    <?php
+
+    use dev\example\AopSampleApplication;
+
+    require_once(dirname(__DIR__) . '/vendor/autoload.php');
+
+    AopSampleApplication::main();
+    ```
+  </Tab>
+
+  <Tab title="composer.json">
+    The sample declares the framework dependency with PSR-4 autoloading for its own namespace.
+
+    ```json
+    {
+        "name": "suvera/winter-boot-aop-sample",
+        "require": {
+            "ext-pcntl": "*",
+            "ext-swoole": "*",
+            "suvera/winter-boot": "@dev"
+        },
+        "autoload": {
+            "psr-4": {
+                "dev\\example\\": "src/"
+            }
+        }
+    }
+    ```
+
+    The runnable sample in `winter-boot-samples` adds a local `path` repository for `winter-boot` so it resolves from a sibling checkout. You do not need that entry when you install the released package from Packagist.
+  </Tab>
+</Tabs>
+
+## Configuration
+
+AOP needs no module config. The full sample `application.yml` sets the server and app identity:
+
+```yaml
+server:
+    port: 8080
+    address: 0.0.0.0
+    context-path: /
+winter:
+    application:
+        name: AOP Guard Sample Application
+        id: aop-guard-sample-app
+        version: 1.0.0
+```
+
+See [Configuration](/configuration) for every `application.yml` key.
+
+## Run the app
+
+Start the application, then call the endpoint with and without the header.
+
+**1. Start the application:**
+
+```bash
+composer install
+php bin/application.php
+```
+
+**2. Call without the header — expect `403`:**
+
+```bash
+curl -i http://127.0.0.1:8080/aop-demo/secure-greeting
+```
+
+```text
+HTTP/1.1 403 Forbidden
+{"success": false, "data": null, "error": "Forbidden"}
+```
+
+The interceptor stopped execution, so the endpoint body never ran.
+
+**3. Call with a wrong value — expect `403`:**
+
+```bash
+curl -i -H "X-Custom-Foo-Bar: wrong" http://127.0.0.1:8080/aop-demo/secure-greeting
+```
+
+**4. Call with the right value — expect `200`:**
+
+```bash
+curl -i -H "X-Custom-Foo-Bar: foo-bar" http://127.0.0.1:8080/aop-demo/secure-greeting
+```
+
+```text
+HTTP/1.1 200 OK
+{"success": true, "data": "Hello from the AOP-guarded endpoint!"}
+```
+
+## Next steps
+
+- Read [AOP](/core/aop) for the advice lifecycle (`begin`/`commit`/`failed`), `stopExecution`, and execution variables.
+- Put reusable advice on `#[Service]` beans the same way — bean-to-bean calls run through proxies, so the same attribute works there unchanged.

@@ -161,6 +161,12 @@
               "examples/scheduler-app",
               "examples/dtce-app"
             ]
+          },
+          {
+            "group": "Core",
+            "pages": [
+              "examples/aop-app"
+            ]
           }
         ]
       },

@@ -195,7 +195,7 @@ Switch between the source files. Each tab shows the exact file from the sample.
   </Tab>
 
   <Tab title="rest/AopDemoController.php">
-    The guarded endpoint. It declares an `HttpRequest` argument so the interceptor can read the incoming headers.
+    The guarded endpoint. It guared by `#[RequireCustomHeader]` AOP advice.
 
     ```php
     <?php
@@ -215,7 +215,7 @@ Switch between the source files. Each tab shows the exact file from the sample.
 
         #[GetMapping(path: "secure-greeting")]
         #[RequireCustomHeader]
-        public function secureGreeting(HttpRequest $request): array {
+        public function secureGreeting(): array {
             return [
                 'success' => true,
                 'data' => 'Hello from the AOP-guarded endpoint!'

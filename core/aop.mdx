@@ -217,7 +217,8 @@ class TimedLog implements AopStereoType {
   </Step>
   <Step title="Create the interceptor class">
 
-Implement `WinterAspect` with all five lifecycle methods. `AopContext` carries method reflection and the application context. `AopExecutionContext` carries the target object, arguments, and execution control handles.
+Implement `WinterAspect` with all five lifecycle methods. `AopContext` carries method reflection and the application context. 
+`AopExecutionContext` carries the target object, arguments, and execution control handles.
 
 ```php TimedLogInterceptor.php
 use dev\winterframework\stereotype\aop\WinterAspect;
@@ -331,9 +332,11 @@ class OrderService {
 
 ## AOP on controllers
 
-In a `#[RestController]`, put AOP attributes only on endpoint methods — the methods marked with `#[GetMapping]`, `#[PostMapping]`, or the other mapping attributes. Those methods run when someone calls their URL, and your advice runs along with them.
+In a `#[RestController]`, put AOP attributes only on endpoint methods — the methods marked with `#[GetMapping]`, `#[PostMapping]`, or the other mapping attributes. 
+Those methods run when someone calls their URL, and your advice runs along with them.
 
-Do not put AOP attributes on plain helper methods inside a controller. Helpers run as ordinary method calls, so your advice will simply never run for them — the attribute sits there doing nothing, with no error to tell you. If a helper needs guarding, move that logic into a `#[Service]` bean instead, where AOP works on every public method.
+Do not put AOP attributes on plain helper methods inside a controller. Helpers run as ordinary method calls, so your advice will simply never run for them — the attribute 
+sits there doing nothing, with no error to tell you. If a helper needs guarding, move that logic into a `#[Service]` bean instead, where AOP works on every public method.
 
 ---
 

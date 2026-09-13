@@ -1,6 +1,6 @@
 ---
-title: "AOP Guard Sample Application"
-sidebarTitle: "AOP guard"
+title: "AOP Sample Application"
+sidebarTitle: "AOP Example"
 description: "Protect a REST endpoint with a custom AOP attribute that checks a request header and denies with 403."
 ---
 
@@ -155,13 +155,7 @@ Switch between the source files. Each tab shows the exact file from the sample.
             /** @var RequireCustomHeader $stereo */
             $stereo = $ctx->getStereoType();
 
-            $request = null;
-            foreach ($exCtx->getArguments() as $arg) {
-                if ($arg instanceof HttpRequest) {
-                    $request = $arg;
-                    break;
-                }
-            }
+            $request = $ctx->getApplicationContext()->getCurrentHttpRequest();
             if (!isset($request)) {
                 throw new WinterException(
                     '#[RequireCustomHeader] needs an HttpRequest argument on method '

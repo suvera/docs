@@ -51,6 +51,68 @@ class UserController
 }
 ```
 
+## Reading the Request
+
+Add an `HttpRequest` parameter to any handler method and Winter Boot hands you the current request. Use it to read anything the parameter annotations (`#[PathVariable]`, `#[RequestParam]`, `#[RequestBody]`) do not cover — headers, cookies, the raw body, or details about the caller.
+
+```php UserController.php
+<?php
+
+namespace dev\winterboot\samples\controller;
+
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\stereotype\web\GetMapping;
+use dev\winterframework\web\http\HttpRequest;
+
+#[RestController]
+class UserController
+{
+    // GET /whoami — echo back what the request carried
+    #[GetMapping(path: '/whoami')]
+    public function whoAmI(HttpRequest $req): array
+    {
+        return [
+            'method'      => $req->getMethod(),          // 'GET'
+            'uri'         => $req->getUri(),             // '/whoami'
+            'page'        => $req->getQueryParam('page'),
+            'auth'        => $req->getFirstHeader('Authorization'),
+            'sessionId'   => $req->getCookie('SID'),
+            'contentType' => $req->getContentType(),
+            'body'        => $req->getRawBody(),
+        ];
+    }
+}
+```
+
+| What you call | What it gives you |
+|---|---|
+| `getMethod()` | HTTP method in upper case (`GET`, `POST`, …) |
+| `getUri()` | Request path without the query string |
+| `getQueryParam($name)` / `getQueryParams()` | One (or all) URL query values |
+| `getPostParam($name)` / `getPostParams()` | One (or all) form fields |
+| `getFirstHeader($name)` / `getHeader($name)` | First value (or all values) of a request header |
+| `getCookie($name)` / `getCookies()` | One (or all) request cookies |
+| `getRawBody()` | Request body as plain text |
+| `getContentType()` | Body content type, e.g. `application/json` |
+| `getFile($name)` / `getFiles()` | Uploaded files |
+
+### Caller and server details
+
+These getters describe who called and where the request landed — the client address for localhost checks or logging, the server address for multi-homed hosts, and timing info. They return `null` when the runtime did not provide a value.
+
+```php
+$ip       = $req->getRemoteAddr();      // client IP, e.g. '127.0.0.1'
+$port     = $req->getRemotePort();      // client port
+$serverIp = $req->getServerAddr();      // your server's IP
+$protocol = $req->getServerProtocol();  // e.g. 'HTTP/1.1'
+$query    = $req->getQueryString();     // raw 'page=2&sort=name'
+$when     = $req->getRequestTime();     // unix timestamp
+```
+
+<Note>
+  Always read these from `HttpRequest`, never from `$_SERVER`. Under Swoole many requests share one process, so `$_SERVER` can hold another request's values — the getters always return the current request's own data.
+</Note>
+
 ## Return Types
 
 Controller methods can return three types of value. Winter Boot inspects the return value and sets the appropriate `Content-Type` header automatically.
@@ -89,6 +151,10 @@ Controller methods can return three types of value. Winter Boot inspects the ret
 | `->withXml(mixed $body)` | Set body + `Content-Type: application/xml` |
 | `->withHeader(string $name, string $value)` | Append a response header |
 | `->withStatusCode(int $code)` | Override status by numeric code |
+| `->withStatus(HttpStatus $status)` | Override status with an `HttpStatus` value |
+| `->withContentType(string $type)` | Set `Content-Type` without touching the body |
+| `->withContentLength(int $bytes)` | Set `Content-Length` (for file downloads) |
+| `->withCookie(name, value, expires, path, domain, secure, httponly)` | Send a cookie (see below) |
 | `->setBody(mixed $body)` | Set body without changing Content-Type |
 
 </Accordion>
@@ -109,6 +175,34 @@ return ResponseEntity::created('/users/42')->withJson($newUser);
 // Custom status code
 return ResponseEntity::status(HttpStatus::$CONFLICT)->withJson(['message' => 'Already exists']);
 ```
+
+### Setting cookies
+
+`withCookie()` sends a cookie with the response. Only `name` is required — everything else has a safe default:
+
+| Argument | Meaning | Default |
+|---|---|---|
+| `name` | Cookie name | (required) |
+| `value` | Cookie value | `''` |
+| `expires` | Expiry as a unix timestamp (`time() + 3600` = one hour) | `0` (browser-session cookie, deleted on close) |
+| `path` | Which site paths receive the cookie | `''` |
+| `domain` | Which domain receives it (empty = current domain) | `''` |
+| `secure` | Send over HTTPS only | `false` |
+| `httponly` | Hide from JavaScript | `false` |
+
+```php
+// Remember a theme for 30 days, visible across the whole site
+return ResponseEntity::ok()
+    ->withCookie('theme', 'dark', time() + 30 * 24 * 3600, '/')
+    ->withJson(['status' => 'saved']);
+
+// Log out: overwrite with an already-expired cookie so the browser drops it
+return ResponseEntity::ok()
+    ->withCookie('SID', '', time() - 3600, '/')
+    ->withJson(['status' => 'logged-out']);
+```
+
+Call it once per cookie — each call adds another `Set-Cookie` header. Read the cookies a request carried with `HttpRequest::getCookie($name)` (see [Reading the Request](#reading-the-request)).
 
 ## Complete CRUD Example
 

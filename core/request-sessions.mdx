@@ -1,0 +1,195 @@
+---
+title: "User Sessions in Winter Boot"
+sidebarTitle: "Sessions"
+description: "Remember logged-in users across requests: log in, read the session, and log out with RequestSession."
+---
+
+When someone logs in to your app, you want the app to remember them on every page after that. That memory is called a **session**: the server stores a few facts (for example, the username), and the browser holds a small cookie with a session id that points to those facts.
+
+Under Swoole, many requests share one server process, so sessions must be kept in per-request objects — never in shared variables. Winter Boot gives you three pieces for this: `SessionManager` opens and saves sessions, `RequestSession` holds one request's session data, and `SessionOptions` describes the cookie.
+
+## Logging in
+
+Ask the manager for the session, store what you need, and save it before returning. Everything is ready to autowire — no setup code is needed:
+
+```php AuthController.php
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\RestController;
+use dev\winterframework\web\http\HttpRequest;
+use dev\winterframework\web\http\ResponseEntity;
+use dev\winterframework\web\session\SessionManager;
+use dev\winterframework\web\session\SessionOptions;
+
+#[RestController]
+class AuthController
+{
+    #[Autowired]
+    protected SessionManager $sessions;
+
+    #[Autowired]
+    protected \SessionHandlerInterface $store;
+
+    // One line per login flow: each flow gets its own cookie setup.
+    private SessionOptions $options;
+
+    public function __construct()
+    {
+        $this->options = new SessionOptions(name: 'SID', expirySecs: 3600);
+    }
+
+    public function login(HttpRequest $req): ResponseEntity
+    {
+        $session = $this->sessions->open($req, $this->store, $this->options);
+        $session->setUsername('alice');
+        $session->set('role', 'admin');
+
+        $res = ResponseEntity::ok(['status' => 'logged-in']);
+        $this->sessions->commit($session, $res, $this->store, $this->options);
+        return $res;
+    }
+}
+```
+
+`commit()` saves the data and puts the session id into a cookie on the response. Always call it before returning — anything you `set()` without `commit()` is thrown away when the request ends.
+
+## Reading the session on the next request
+
+Open the session the same way. If the browser sent back a valid session cookie, you get the stored data; otherwise you get a fresh, empty session:
+
+```php
+$session = $this->sessions->open($req, $this->store, $this->options);
+if ($session->isNew()) {
+    // not logged in
+}
+$role = $session->get('role');
+```
+
+## Logging out
+
+```php
+$session = $this->sessions->open($req, $this->store, $this->options);
+$session->destroy();
+$this->sessions->commit($session, $res, $this->store, $this->options);
+```
+
+This deletes the stored data and tells the browser to drop the cookie.
+
+## Cookie settings
+
+`SessionOptions` is a plain object — you create one per login flow with `new`, right where you use it. Different flows need different cookies: an admin login might last 15 minutes on HTTPS only, while a regular user login lasts all day. Give each flow its own cookie name and they stay independent, even in the same browser:
+
+```php
+$adminSessions = new SessionOptions(
+    name: 'ADMINSESSID',   // cookie name
+    expirySecs: 900,       // login lifetime in seconds; 0 = until the browser closes
+    path: '/',             // which site paths receive the cookie
+    domain: '',            // empty = current domain only
+    secure: true,          // send the cookie over HTTPS only
+    httponly: true,        // hide the cookie from JavaScript
+);
+
+$userSessions = new SessionOptions(
+    name: 'USERSESSID',
+    expirySecs: 86400,
+    path: '/',
+    domain: '',
+    secure: true,
+    httponly: true,
+);
+```
+
+Pass the right one to `open()` and `commit()`. Both flows can share the same store — the cookie name keeps their sessions apart. If you only ever need one kind of login, one `SessionOptions` is enough.
+
+## Knowing who is logged in
+
+Two fields travel with every session: `username` and `session type`. Set them at login:
+
+```php
+$session->setUsername('alice');
+$session->setSessionType(1);
+```
+
+They are loaded back automatically on every later request, so code that only updates other data never erases them. The username is written once at login: later saves that carry no name keep the stored one, so it cannot be wiped by accident — only a new name replaces it. The session type is a number your app defines (for example, `1` for admins) — `0` simply means "no type set".
+
+## Where sessions are kept
+
+Out of the box, sessions are stored in files on the server — fine for getting started or a single server. For several servers, or sessions that must survive a restart, use a database or Redis instead by declaring one store bean (it must return `\SessionHandlerInterface`):
+
+### Database sessions
+
+Create the table once:
+
+```sql
+CREATE TABLE winter_sessions (
+    session_id VARCHAR(128) NOT NULL PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    expiry BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0,
+    session_type SMALLINT NOT NULL DEFAULT 0,
+    session_data TEXT
+);
+```
+
+Then expose the store:
+
+```php SessionConfig.php
+use dev\winterframework\pdbc\PdbcTemplate;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\stereotype\Configuration;
+use dev\winterframework\web\session\PdbcSessionStore;
+
+#[Configuration]
+class SessionConfig
+{
+    #[Autowired]
+    protected PdbcTemplate $pdbc;
+
+    #[Bean]
+    public function sessionStore(): \SessionHandlerInterface
+    {
+        return new PdbcSessionStore($this->pdbc, table: 'winter_sessions', ttlSecs: 3600);
+    }
+}
+```
+
+`created_at` records when the session was first saved; `updated_at` refreshes on every save. Old, expired sessions can be cleaned up automatically.
+
+### Redis sessions
+
+The `winter-data-redis` module offers `dev\winterframework\data\redis\session\RedisSessionStore`, which keeps each session as a hash under `keyPrefix + sessionId` and lets Redis expire old sessions by itself. Like the database store, it persists `username` and session type with the same write-once rule:
+
+```php SessionConfig.php
+use dev\winterframework\data\redis\phpredis\PhpRedisTemplate;
+use dev\winterframework\data\redis\session\RedisSessionStore;
+use dev\winterframework\stereotype\Autowired;
+use dev\winterframework\stereotype\Bean;
+use dev\winterframework\stereotype\Configuration;
+
+#[Configuration]
+class SessionConfig
+{
+    #[Autowired]
+    protected PhpRedisTemplate $redis;
+
+    #[Bean]
+    public function sessionStore(): \SessionHandlerInterface
+    {
+        return new RedisSessionStore($this->redis, keyPrefix: 'myapp:sess:', ttlSecs: 3600);
+    }
+}
+```
+
+## The session API
+
+| What you call | What it does |
+|---|---|
+| `getId()` | The session id from the browser's cookie, or a fresh one |
+| `isNew()` | True when there is no saved data for this id (not logged in) |
+| `get($key, $default = null)` | Read one stored value |
+| `set($key, $value)` | Store one value (kept only after `commit()`) |
+| `remove($key)` | Delete one stored value |
+| `destroy()` | Log out: delete everything on the next `commit()` |
+| `getUsername()` / `setUsername($u)` | Who the session belongs to |
+| `getSessionType()` / `setSessionType($t)` | Your own session category number |

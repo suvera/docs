@@ -34,7 +34,8 @@
               "core/dependency-injection",
               "core/aop",
               "core/application-lifecycle",
-              "core/module-system"
+              "core/module-system",
+              "core/request-sessions"
             ]
           },
           {
@@ -75,7 +76,6 @@
           {
             "group": "Building Applications",
             "pages": [
-              "building/cli-commands",
               "building/testing",
               "advanced/json-xml",
               "advanced/local-stores",

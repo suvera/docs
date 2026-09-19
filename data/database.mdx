@@ -550,3 +550,31 @@ class OrderService {
 | `getPdbcTemplate(string $tenantId)` | `PdbcTemplate` | Returns (or lazily creates) a `PdbcTemplate` for the given tenant |
 | `getTransactionManager(string $tenantId)` | `PlatformTransactionManager` | Returns (or lazily creates) a transaction manager for the given tenant |
 | `getTenantDataSourceProvider()` | `TenantDataSourceProvider` | Returns the configured provider instance |
+
+## Swoole: per-request connections with a safety cap
+
+Under Swoole, every request (or job, or message) that touches the database gets its own real database connection from its datasource pool, so two concurrent requests can never share (and corrupt) one. Requests that never touch the database open none, and every connection is closed when its request finishes.
+
+Each pool is capped at **50 open connections**. When all 50 are busy, the next request waits up to **5 seconds** for one to free up; if none does, it fails fast with a clear `PoolExhaustedException` instead of silently sharing a connection. The global defaults live under `winter.coroutine.db` (on under Swoole, off without it):
+
+```yaml
+winter:
+    coroutine:
+        db:
+            enabled: true       # kill switch: set to false to restore old behavior
+            maxConnections: 50  # max open DB connections per pool, 0 = unlimited (not recommended)
+            maxWaitMs: 5000     # how long to wait for a free connection before failing
+```
+
+A single datasource can override both caps in its own `connection` block (the override wins over the global defaults):
+
+```yaml
+datasource:
+    -   name: defaultdb
+        # ...
+        connection:
+            maxConnections: 50
+            maxWaitMs: 5000
+```
+
+How to size the cap: add up every pool (using each datasource's override where one is set), multiply by your Swoole worker count, and keep the total below the database's `max_connections` (MySQL defaults to 151, Postgres to 100). If the coroutine machinery itself fails, the failure is logged and the request degrades instead of crashing — but pool exhaustion stays loud with `PoolExhaustedException`.
